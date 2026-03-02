@@ -14,8 +14,48 @@ Commands are invoked through stable `Tools.*` names, the same surface used by th
 
 ## Requirements
 
-- Visual Studio 2026 / 18 Community, Professional, or Enterprise
 - Windows
+- Visual Studio 2026 / 18
+
+The extension targets VS 18, but the helper scripts in `scripts\` currently probe the `Community` install path first and then fall back to the VS 2022 Community path. If you use Professional or Enterprise, adjust the script paths before using the build/install wrappers.
+
+## Script Requirements
+
+### PowerShell scripts
+
+The PowerShell entry points in `scripts\` use built-in Windows PowerShell features only:
+
+- PowerShell with COM interop support (`Add-Type`, ROT/DTE automation)
+- Standard Windows cmdlets such as `Get-Process`, `Stop-Process`, `Start-Process`, `Get-CimInstance`, and `ConvertFrom-Json`
+
+No extra PowerShell modules are required.
+
+### Python pipe client
+
+`scripts\vs_bridge_pipe.py` requires:
+
+- Python 3
+- `pywin32`
+
+Install with:
+
+```bash
+python -m pip install -r scripts/requirements-vs_bridge_pipe.txt
+```
+
+Or:
+
+```bash
+python -m pip install pywin32
+```
+
+### Native helper used by result readers
+
+`scripts\read_bridge_result.ps1` and `scripts\read_bridge_result.bat` depend on `IdeBridgeJsonProbe.exe`, which is built from the `src\IdeBridgeJsonProbe` project in this repo. Build the solution first:
+
+```bat
+scripts\build_vsix.bat
+```
 
 ## Build
 
@@ -77,6 +117,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\invoke_vs_ide_comman
 | Command | Description |
 |---------|-------------|
 | `Tools.IdeHelp` | List all registered commands |
+| `Tools.IdeSmokeTest` | Capture a minimal state snapshot for smoke validation |
 | `Tools.IdeGetState` | Snapshot of IDE state (solution path, active document, etc.) |
 | `Tools.IdeWaitForReady` | Block until IntelliSense is available |
 | `Tools.IdeOpenSolution` | Open a solution file |
@@ -90,6 +131,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\invoke_vs_ide_comman
 | `Tools.IdeFindFiles` | Find files by name |
 | `Tools.IdeGetDocumentSlice` | Fetch lines around a location |
 | `Tools.IdeGetFileOutline` | Symbol list for a file (functions, classes, etc.) |
+| `Tools.IdeSearchSymbols` | Search symbols by name across the current scope |
+| `Tools.IdeGetQuickInfo` | Resolve symbol/definition info at a location |
+| `Tools.IdeGetDocumentSlices` | Fetch multiple document ranges from a JSON ranges file |
 | `Tools.IdeGetSmartContextForQuery` | Multi-context gather for agent queries |
 | `Tools.IdeFindAllReferences` | Semantic find-all-references |
 | `Tools.IdeShowCallHierarchy` | Callers and callees |
@@ -114,6 +158,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\invoke_vs_ide_comman
 | `Tools.IdeListBreakpoints` | List all breakpoints |
 | `Tools.IdeRemoveBreakpoint` | Remove a breakpoint |
 | `Tools.IdeClearAllBreakpoints` | Remove all breakpoints |
+| `Tools.IdeEnableBreakpoint` | Enable a breakpoint at file/line |
+| `Tools.IdeDisableBreakpoint` | Disable a breakpoint at file/line |
+| `Tools.IdeEnableAllBreakpoints` | Enable every breakpoint |
+| `Tools.IdeDisableAllBreakpoints` | Disable every breakpoint |
 
 ### Debugger
 
@@ -253,7 +301,7 @@ success=true
 summary=IDE state captured.
 ```
 
-## Named Pipe Client
+## Named Pipe Server
 
 The VSIX automatically starts a **persistent named pipe server** when Visual Studio loads the extension. Connecting directly over the pipe eliminates PowerShell process startup and COM mutex overhead on every call.
 
@@ -262,7 +310,7 @@ The VSIX automatically starts a **persistent named pipe server** when Visual Stu
 | Method | 1 command | 3 commands (batch) |
 |--------|-----------|-------------------|
 | PS wrapper | ~11 s | ~11 s |
-| Pipe client (conda Python startup) | ~3 s | ~3.2 s |
+| Pipe client (Python startup) | ~3 s | ~3.2 s |
 | Pipe round-trip only | < 1 ms | < 3 ms |
 
 ### Discovery
@@ -279,32 +327,32 @@ When the VSIX starts it writes:
 
 The file is deleted when Visual Studio exits. A missing file means VS is not running or the extension failed to load.
 
-### Python client (`tools/scripts/vs_bridge_pipe.py`)
+### Python client (`scripts\vs_bridge_pipe.py`)
 
-Requires **pywin32**:
+Requires **Python 3** and **pywin32**:
 
 ```bash
-conda run -n superslicer pip install pywin32
+python -m pip install -r scripts/requirements-vs_bridge_pipe.txt
 ```
 
 Single command:
 
 ```bash
-conda run -n superslicer python tools/scripts/vs_bridge_pipe.py \
+conda run -n superslicer python scripts/vs_bridge_pipe.py \
   --cmd Tools.IdeGetState --format summary
 ```
 
 With arguments:
 
 ```bash
-conda run -n superslicer python tools/scripts/vs_bridge_pipe.py \
+conda run -n superslicer python scripts/vs_bridge_pipe.py \
   --cmd Tools.IdeFindFiles --args '--query "GUI_App.cpp"' --format json
 ```
 
-Batch (all commands share one Python process — amortises startup cost):
+Batch (all commands share one Python process):
 
 ```bash
-conda run -n superslicer python tools/scripts/vs_bridge_pipe.py \
+conda run -n superslicer python scripts/vs_bridge_pipe.py \
   --batch output/test-batch.json --format summary
 ```
 
@@ -321,6 +369,18 @@ Batch file format (same as `IdeBatchCommands`):
 `--out FILE` writes the full JSON response(s) to a file.
 `--sln HINT` filters discovery when multiple VS instances are running.
 
+### Pipe protocol
+
+Each request is one JSON object terminated by `\n`:
+
+```json
+{ "id": "req-1", "command": "Tools.IdeGetState", "args": "--out \"C:\\temp\\state.json\"" }
+```
+
+Each response is one JSON envelope terminated by `\n`, using the same shape as the file-based command output.
+
+Use the discovery file to find the current pipe name, then send newline-delimited UTF-8 JSON over that named pipe. `args` uses the same command-line argument format as the DTE and PowerShell wrappers.
+
 ## Scripts
 
 | Script | Purpose |
@@ -334,6 +394,7 @@ Batch file format (same as `IdeBatchCommands`):
 | `scripts\smoke_test.ps1` | End-to-end validation flow |
 | `scripts\read_bridge_result.bat` | Read a JSON envelope as `key=value` pairs |
 | `scripts\read_bridge_result.ps1` | PowerShell entry point for the same reader |
+| `scripts\vs_bridge_pipe.py` | Direct named-pipe client for low-overhead command execution |
 | `scripts\vs_dte_probe.ps1` | Inspect live VS 18 DTE instances |
 
 ## Wrapper Reference
