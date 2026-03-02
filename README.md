@@ -42,6 +42,8 @@ Current state:
   - `Tools.IdeCloseAllExceptCurrent`
   - `Tools.IdeGetSmartContextForQuery`
   - `Tools.IdeApplyUnifiedDiff`
+  - `Tools.IdeGoToDefinition`
+  - `Tools.IdeGetFileOutline`
   - breakpoint reveal-on-set
   - debugger wait options for start/continue/step commands
 - validated commands:
@@ -151,6 +153,8 @@ Search and navigation:
 - `Tools.IdeGetDocumentSlice`
 - `Tools.IdeGetSmartContextForQuery`
 - `Tools.IdeApplyUnifiedDiff`
+- `Tools.IdeGoToDefinition`
+- `Tools.IdeGetFileOutline`
 
 Breakpoints:
 
@@ -220,6 +224,8 @@ Tools.IdeShowCallHierarchy --file "C:\repo\src\foo.cpp" --line 42 --column 13 --
 Tools.IdeGetDocumentSlice --file "C:\repo\src\foo.cpp" --line 42 --context-before 8 --context-after 24 --out "C:\temp\slice.json"
 Tools.IdeGetSmartContextForQuery --query "where is GUI_App::OnInit used" --out "C:\temp\smart-context.json"
 Tools.IdeApplyUnifiedDiff --patch-file "C:\temp\change.diff" --out "C:\temp\apply-diff.json"
+Tools.IdeGoToDefinition --file "C:\repo\src\foo.cpp" --line 42 --column 13 --out "C:\temp\goto-def.json"
+Tools.IdeGetFileOutline --file "C:\repo\src\foo.cpp" --max-depth 2 --out "C:\temp\outline.json"
 Tools.IdeSetBreakpoint --file "C:\repo\src\foo.cpp" --line 42 --condition "count == 12" --reveal true --out "C:\temp\bp.json"
 Tools.IdeDebugStart --wait-for-break true --timeout-ms 120000 --out "C:\temp\debug-start.json"
 Tools.IdeBuildAndCaptureErrors --out "C:\temp\build-errors.json" --timeout-ms 600000
@@ -228,6 +234,10 @@ Tools.IdeBuildAndCaptureErrors --out "C:\temp\build-errors.json" --timeout-ms 60
 `Tools.IdeFindAllReferences` and `Tools.IdeShowCallHierarchy` use the symbol at the active caret by default. Use `--file`, `--document`, `--line`, and `--column` when you want the bridge to position the editor first.
 
 `Tools.IdeApplyUnifiedDiff` accepts either `--patch-file` or `--patch-text-base64`.
+
+`Tools.IdeGoToDefinition` positions the cursor at `--file`/`--line`/`--column`, executes `Edit.GoToDefinition`, and returns both the source location and the resulting definition location. Works on any language VS has a language service for. `definitionFound` is `true` when the command navigated to a different file or line.
+
+`Tools.IdeGetFileOutline` enumerates symbols in a file using VS's FileCodeModel (functions, classes, structs, enums, namespaces, interfaces) and returns a flat list with name, kind, start/end line, and nesting depth. Works best for C# and VB; C++ support is partial and depends on whether VS has a code model for the file.
 
 `Tools.IdeSetBreakpoint` reveals the target line in the editor by default so the user can immediately see where the breakpoint landed.
 

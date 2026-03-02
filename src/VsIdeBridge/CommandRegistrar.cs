@@ -39,6 +39,8 @@ internal static class CommandRegistrar
         _ = new SearchNavigationCommands.IdeShowCallHierarchyCommand(package, runtime, commandService);
         _ = new SearchNavigationCommands.IdeGetDocumentSliceCommand(package, runtime, commandService);
         _ = new SearchNavigationCommands.IdeGetSmartContextForQueryCommand(package, runtime, commandService);
+        _ = new SearchNavigationCommands.IdeGoToDefinitionCommand(package, runtime, commandService);
+        _ = new SearchNavigationCommands.IdeGetFileOutlineCommand(package, runtime, commandService);
         _ = new PatchCommands.IdeApplyUnifiedDiffCommand(package, runtime, commandService);
 
         _ = new BreakpointCommands.IdeSetBreakpointCommand(package, runtime, commandService);

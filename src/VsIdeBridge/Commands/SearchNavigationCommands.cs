@@ -363,4 +363,51 @@ internal static class SearchNavigationCommands
                 data);
         }
     }
+
+    internal sealed class IdeGoToDefinitionCommand : IdeCommandBase
+    {
+        public IdeGoToDefinitionCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+            : base(package, runtime, commandService, 0x0222)
+        {
+        }
+
+        protected override string CanonicalName => "Tools.IdeGoToDefinition";
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            var data = await context.Runtime.DocumentService.GoToDefinitionAsync(
+                    context.Dte,
+                    args.GetString("file"),
+                    args.GetString("document"),
+                    args.GetNullableInt32("line"),
+                    args.GetNullableInt32("column"))
+                .ConfigureAwait(true);
+
+            var found = (bool?)data["definitionFound"] == true;
+            return new CommandExecutionResult(
+                found ? "Navigated to definition." : "Go To Definition executed (location unchanged).",
+                data);
+        }
+    }
+
+    internal sealed class IdeGetFileOutlineCommand : IdeCommandBase
+    {
+        public IdeGetFileOutlineCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+            : base(package, runtime, commandService, 0x0223)
+        {
+        }
+
+        protected override string CanonicalName => "Tools.IdeGetFileOutline";
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            var data = await context.Runtime.DocumentService.GetFileOutlineAsync(
+                    context.Dte,
+                    args.GetString("file"),
+                    args.GetInt32("max-depth", 3))
+                .ConfigureAwait(true);
+
+            return new CommandExecutionResult($"Found {data["count"]} symbol(s).", data);
+        }
+    }
 }

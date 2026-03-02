@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using EnvDTE;
 using EnvDTE80;
@@ -310,6 +311,179 @@ internal sealed class DocumentService
             ["text"] = builder.ToString(),
             ["lines"] = sliceLines,
         };
+    }
+
+    public async Task<JObject> GoToDefinitionAsync(
+        DTE2 dte,
+        string? filePath,
+        string? documentQuery,
+        int? line,
+        int? column)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        var sourceLocation = await PositionTextSelectionAsync(dte, filePath, documentQuery, line, column, selectWord: false)
+            .ConfigureAwait(true);
+
+        try
+        {
+            dte.ExecuteCommand("Edit.GoToDefinition");
+        }
+        catch (COMException ex)
+        {
+            throw new CommandErrorException("unsupported_operation", $"Edit.GoToDefinition failed: {ex.Message}");
+        }
+
+        var activeDoc = dte.ActiveDocument;
+        if (activeDoc is null)
+        {
+            return new JObject
+            {
+                ["sourceLocation"] = sourceLocation,
+                ["definitionLocation"] = null,
+                ["definitionFound"] = false,
+            };
+        }
+
+        var definitionPath = PathNormalization.NormalizeFilePath(activeDoc.FullName);
+        int definitionLine = 0, definitionColumn = 0;
+        string selectedText = string.Empty, lineText = string.Empty;
+
+        if (activeDoc.Object("TextDocument") is TextDocument defTextDoc)
+        {
+            var selection = defTextDoc.Selection;
+            definitionLine = selection.ActivePoint.Line;
+            definitionColumn = selection.ActivePoint.DisplayColumn;
+            selectedText = selection.Text ?? string.Empty;
+            lineText = GetLineText(defTextDoc, definitionLine);
+        }
+
+        var definitionLocation = new JObject
+        {
+            ["resolvedPath"] = definitionPath,
+            ["name"] = activeDoc.Name ?? string.Empty,
+            ["line"] = definitionLine,
+            ["column"] = definitionColumn,
+            ["selectedText"] = selectedText,
+            ["lineText"] = lineText,
+        };
+
+        var sourcePath = (string?)sourceLocation["resolvedPath"] ?? string.Empty;
+        var sourceLine = (int?)sourceLocation["line"] ?? 0;
+        var definitionFound = !string.Equals(sourcePath, definitionPath, StringComparison.OrdinalIgnoreCase)
+            || sourceLine != definitionLine;
+
+        return new JObject
+        {
+            ["sourceLocation"] = sourceLocation,
+            ["definitionLocation"] = definitionLocation,
+            ["definitionFound"] = definitionFound,
+        };
+    }
+
+    public async Task<JObject> GetFileOutlineAsync(DTE2 dte, string? filePath, int maxDepth)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        var resolvedPath = ResolveDocumentPath(dte, filePath);
+
+        ProjectItem? projectItem = null;
+        try { projectItem = dte.Solution.FindProjectItem(resolvedPath); } catch { }
+
+        if (projectItem is null)
+        {
+            return new JObject
+            {
+                ["resolvedPath"] = resolvedPath,
+                ["count"] = 0,
+                ["symbols"] = new JArray(),
+                ["note"] = "File is not part of any project or code model is unavailable.",
+            };
+        }
+
+        var symbols = new JArray();
+        string? note = null;
+        try
+        {
+            var codeModel = projectItem.FileCodeModel;
+            if (codeModel?.CodeElements is not null)
+            {
+                foreach (CodeElement element in codeModel.CodeElements)
+                {
+                    try { CollectOutlineSymbols(element, symbols, 0, maxDepth); } catch { }
+                }
+            }
+            else
+            {
+                note = "No code model available for this file type.";
+            }
+        }
+        catch (Exception ex)
+        {
+            note = $"Code model unavailable: {ex.Message}";
+        }
+
+        var result = new JObject
+        {
+            ["resolvedPath"] = resolvedPath,
+            ["count"] = symbols.Count,
+            ["symbols"] = symbols,
+        };
+        if (note is not null) result["note"] = note;
+        return result;
+    }
+
+    private static readonly HashSet<vsCMElement> s_outlineKinds = new HashSet<vsCMElement>
+    {
+        vsCMElement.vsCMElementFunction,
+        vsCMElement.vsCMElementClass,
+        vsCMElement.vsCMElementStruct,
+        vsCMElement.vsCMElementEnum,
+        vsCMElement.vsCMElementNamespace,
+        vsCMElement.vsCMElementInterface,
+    };
+
+    private static void CollectOutlineSymbols(CodeElement element, JArray symbols, int depth, int maxDepth)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (depth > maxDepth) return;
+
+        vsCMElement kind;
+        try { kind = element.Kind; } catch { return; }
+
+        string name = string.Empty;
+        int startLine = 0, endLine = 0;
+        try { name = element.Name ?? string.Empty; } catch { }
+        try { startLine = element.StartPoint?.Line ?? 0; } catch { }
+        try { endLine = element.EndPoint?.Line ?? 0; } catch { }
+
+        if (s_outlineKinds.Contains(kind))
+        {
+            symbols.Add(new JObject
+            {
+                ["name"] = name,
+                ["kind"] = kind.ToString().Replace("vsCMElement", string.Empty),
+                ["startLine"] = startLine,
+                ["endLine"] = endLine,
+                ["depth"] = depth,
+            });
+        }
+
+        CodeElements? children = null;
+        try
+        {
+            if (element is CodeNamespace ns) children = ns.Members;
+            else if (element is CodeClass cls) children = cls.Members;
+            else if (element is CodeStruct st) children = st.Members;
+            else if (element is CodeInterface iface) children = iface.Members;
+        }
+        catch { }
+
+        if (children is null) return;
+        foreach (CodeElement child in children)
+        {
+            try { CollectOutlineSymbols(child, symbols, depth + 1, maxDepth); } catch { }
+        }
     }
 
     private static string ResolveDocumentPath(DTE2 dte, string? filePath)

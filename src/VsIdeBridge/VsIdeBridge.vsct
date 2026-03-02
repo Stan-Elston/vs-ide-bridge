@@ -274,6 +274,28 @@
           <LocCanonicalName>.Tools.IdeApplyUnifiedDiff</LocCanonicalName>
         </Strings>
       </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeGoToDefinition" priority="0x0222" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Go To Definition</ButtonText>
+          <CommandName>IdeGoToDefinition</CommandName>
+          <CanonicalName>Tools.IdeGoToDefinition</CanonicalName>
+          <LocCanonicalName>.Tools.IdeGoToDefinition</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeGetFileOutline" priority="0x0223" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Get File Outline</ButtonText>
+          <CommandName>IdeGetFileOutline</CommandName>
+          <CanonicalName>Tools.IdeGetFileOutline</CanonicalName>
+          <LocCanonicalName>.Tools.IdeGetFileOutline</LocCanonicalName>
+        </Strings>
+      </Button>
       <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeSetBreakpoint" priority="0x0206" type="Button">
         <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
         <CommandFlag>CommandWellOnly</CommandFlag>
@@ -473,6 +495,8 @@
       <IDSymbol name="cmdidIdeGetDocumentSlice" value="0x0215" />
       <IDSymbol name="cmdidIdeGetSmartContextForQuery" value="0x0220" />
       <IDSymbol name="cmdidIdeApplyUnifiedDiff" value="0x0221" />
+      <IDSymbol name="cmdidIdeGoToDefinition" value="0x0222" />
+      <IDSymbol name="cmdidIdeGetFileOutline" value="0x0223" />
       <IDSymbol name="cmdidIdeSetBreakpoint" value="0x0206" />
       <IDSymbol name="cmdidIdeListBreakpoints" value="0x0207" />
       <IDSymbol name="cmdidIdeRemoveBreakpoint" value="0x0208" />
