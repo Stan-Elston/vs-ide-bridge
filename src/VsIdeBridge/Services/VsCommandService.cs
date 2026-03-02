@@ -141,7 +141,6 @@ internal sealed class VsCommandService
             .Cast<Command>()
             .FirstOrDefault(command => string.Equals(command.Name, commandName, StringComparison.OrdinalIgnoreCase));
     }
-
     private static string[] ToStringArray(object bindings)
     {
         if (bindings is object[] items)

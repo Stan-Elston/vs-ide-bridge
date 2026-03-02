@@ -36,7 +36,10 @@ internal static class DebugBuildCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.DebuggerService.StartAsync(context.Dte).ConfigureAwait(true);
+            var data = await context.Runtime.DebuggerService.StartAsync(
+                context.Dte,
+                args.GetBoolean("wait-for-break", false),
+                args.GetInt32("timeout-ms", 120000)).ConfigureAwait(true);
             return new CommandExecutionResult("Debugger started.", data);
         }
     }
@@ -84,7 +87,10 @@ internal static class DebugBuildCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.DebuggerService.ContinueAsync(context.Dte).ConfigureAwait(true);
+            var data = await context.Runtime.DebuggerService.ContinueAsync(
+                context.Dte,
+                args.GetBoolean("wait-for-break", false),
+                args.GetInt32("timeout-ms", 120000)).ConfigureAwait(true);
             return new CommandExecutionResult("Debugger continued.", data);
         }
     }
@@ -100,7 +106,9 @@ internal static class DebugBuildCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.DebuggerService.StepOverAsync(context.Dte).ConfigureAwait(true);
+            var data = await context.Runtime.DebuggerService.StepOverAsync(
+                context.Dte,
+                args.GetInt32("timeout-ms", 120000)).ConfigureAwait(true);
             return new CommandExecutionResult("Debugger step over completed.", data);
         }
     }
@@ -116,7 +124,9 @@ internal static class DebugBuildCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.DebuggerService.StepIntoAsync(context.Dte).ConfigureAwait(true);
+            var data = await context.Runtime.DebuggerService.StepIntoAsync(
+                context.Dte,
+                args.GetInt32("timeout-ms", 120000)).ConfigureAwait(true);
             return new CommandExecutionResult("Debugger step into completed.", data);
         }
     }
@@ -132,7 +142,9 @@ internal static class DebugBuildCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.DebuggerService.StepOutAsync(context.Dte).ConfigureAwait(true);
+            var data = await context.Runtime.DebuggerService.StepOutAsync(
+                context.Dte,
+                args.GetInt32("timeout-ms", 120000)).ConfigureAwait(true);
             return new CommandExecutionResult("Debugger step out completed.", data);
         }
     }

@@ -20,7 +20,10 @@ The first release includes:
 - solution readiness waiting
 - file and text search with JSON output
 - document/tab/window activation
+- open-tab listing and cleanup
 - symbol actions through native Visual Studio commands
+- smart context gathering for large codebases
+- unified diff application with changed-file reopen
 - breakpoint management
 - debugger control and state capture
 - build and Error List capture
@@ -33,11 +36,23 @@ Current state:
 
 - VSIX builds and installs successfully on Visual Studio 2026 / 18
 - wrapper automation works against both this repo and SuperSlicer
+- current feature update adds:
+  - `Tools.IdeListOpenTabs`
+  - `Tools.IdeCloseFile`
+  - `Tools.IdeCloseAllExceptCurrent`
+  - `Tools.IdeGetSmartContextForQuery`
+  - `Tools.IdeApplyUnifiedDiff`
+  - breakpoint reveal-on-set
+  - debugger wait options for start/continue/step commands
 - validated commands:
   - `Tools.IdeWaitForReady`
   - `Tools.IdeGetState`
   - `Tools.IdeFindFiles`
   - `Tools.IdeFindText`
+  - `Tools.IdeListOpenTabs`
+  - `Tools.IdeCloseFile`
+  - `Tools.IdeCloseAllExceptCurrent`
+  - `Tools.IdeGetSmartContextForQuery`
   - `Tools.IdeGetErrorList`
 
 SuperSlicer validation used:
@@ -123,14 +138,19 @@ Search and navigation:
 - `Tools.IdeFindText`
 - `Tools.IdeOpenDocument`
 - `Tools.IdeListDocuments`
+- `Tools.IdeListOpenTabs`
 - `Tools.IdeActivateDocument`
 - `Tools.IdeCloseDocument`
+- `Tools.IdeCloseFile`
+- `Tools.IdeCloseAllExceptCurrent`
 - `Tools.IdeActivateWindow`
 - `Tools.IdeListWindows`
 - `Tools.IdeExecuteVsCommand`
 - `Tools.IdeFindAllReferences`
 - `Tools.IdeShowCallHierarchy`
 - `Tools.IdeGetDocumentSlice`
+- `Tools.IdeGetSmartContextForQuery`
+- `Tools.IdeApplyUnifiedDiff`
 
 Breakpoints:
 
@@ -188,18 +208,28 @@ Tools.IdeFindFiles --query "VsIdeBridge.csproj" --out "C:\temp\files.json"
 Tools.IdeFindText --query "Tools.IdeGetState" --scope solution --out "C:\temp\find.json"
 Tools.IdeOpenDocument --file "C:\repo\src\foo.cpp" --line 42 --column 1 --out "C:\temp\open.json"
 Tools.IdeListDocuments --out "C:\temp\documents.json"
+Tools.IdeListOpenTabs --out "C:\temp\tabs.json"
 Tools.IdeActivateDocument --query "foo.cpp" --out "C:\temp\activate-document.json"
 Tools.IdeCloseDocument --query "foo.cpp" --out "C:\temp\close-document.json"
+Tools.IdeCloseFile --file "C:\repo\src\foo.cpp" --out "C:\temp\close-file.json"
+Tools.IdeCloseAllExceptCurrent --out "C:\temp\close-other-tabs.json"
 Tools.IdeListWindows --query "References" --out "C:\temp\windows.json"
 Tools.IdeExecuteVsCommand --command "View.SolutionExplorer" --out "C:\temp\execute-command.json"
 Tools.IdeFindAllReferences --file "C:\repo\src\foo.cpp" --line 42 --column 13 --out "C:\temp\references.json"
 Tools.IdeShowCallHierarchy --file "C:\repo\src\foo.cpp" --line 42 --column 13 --out "C:\temp\call-hierarchy.json"
 Tools.IdeGetDocumentSlice --file "C:\repo\src\foo.cpp" --line 42 --context-before 8 --context-after 24 --out "C:\temp\slice.json"
-Tools.IdeSetBreakpoint --file "C:\repo\src\foo.cpp" --line 42 --out "C:\temp\bp.json"
+Tools.IdeGetSmartContextForQuery --query "where is GUI_App::OnInit used" --out "C:\temp\smart-context.json"
+Tools.IdeApplyUnifiedDiff --patch-file "C:\temp\change.diff" --out "C:\temp\apply-diff.json"
+Tools.IdeSetBreakpoint --file "C:\repo\src\foo.cpp" --line 42 --condition "count == 12" --reveal true --out "C:\temp\bp.json"
+Tools.IdeDebugStart --wait-for-break true --timeout-ms 120000 --out "C:\temp\debug-start.json"
 Tools.IdeBuildAndCaptureErrors --out "C:\temp\build-errors.json" --timeout-ms 600000
 ```
 
 `Tools.IdeFindAllReferences` and `Tools.IdeShowCallHierarchy` use the symbol at the active caret by default. Use `--file`, `--document`, `--line`, and `--column` when you want the bridge to position the editor first.
+
+`Tools.IdeApplyUnifiedDiff` accepts either `--patch-file` or `--patch-text-base64`.
+
+`Tools.IdeSetBreakpoint` reveals the target line in the editor by default so the user can immediately see where the breakpoint landed.
 
 Search and navigation results use normalized absolute file paths so an external tool can safely open or edit the same file in the background.
 
@@ -226,6 +256,12 @@ For symbol-heavy work, the next step after a slice is usually a native Visual St
 ```text
 Tools.IdeFindAllReferences --file "C:\repo\src\GUI_App.cpp" --line 1045 --column 12 --out "C:\temp\references.json"
 Tools.IdeShowCallHierarchy --file "C:\repo\src\GUI_App.cpp" --line 1045 --column 12 --out "C:\temp\call-hierarchy.json"
+```
+
+For agent-driven edits, the bridge can also apply a unified diff directly and reopen the changed files:
+
+```text
+Tools.IdeApplyUnifiedDiff --patch-file "C:\temp\change.diff" --base-directory "C:\repo" --out "C:\temp\apply-diff.json"
 ```
 
 ## JSON Output
@@ -324,6 +360,7 @@ Validated locally:
   - state capture
   - file search for `GUI_App.cpp`
   - tab open/activate/close flow across `GUI_App.cpp` and `GUI_App.hpp`
+  - smart-context query for `where is GUI_App::OnInit used`
   - native `View.CallHierarchy` against `choose_app_dir`
   - native `Edit.FindAllReferences` against `choose_app_dir`
   - Error List export
@@ -347,4 +384,5 @@ Example generated artifacts:
 - The extension is command-first. The only visible menu items are `Help` and `Smoke Test`.
 - Search currently scans files on disk; unsaved in-memory editor changes are not yet part of search results.
 - Symbol commands intentionally rely on Visual Studio's own language services rather than bridge-side parsing.
+- `Tools.IdeExecuteVsCommand` remains available for host-specific VS commands that have not been promoted to first-class bridge commands.
 - `Tools.Ide*` is the public contract even though Visual Studio internally registers these commands as `Tools.Tools.Ide*`.

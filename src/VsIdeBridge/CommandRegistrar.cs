@@ -27,14 +27,19 @@ internal static class CommandRegistrar
         _ = new SearchNavigationCommands.IdeFindFilesCommand(package, runtime, commandService);
         _ = new SearchNavigationCommands.IdeOpenDocumentCommand(package, runtime, commandService);
         _ = new SearchNavigationCommands.IdeListDocumentsCommand(package, runtime, commandService);
+        _ = new SearchNavigationCommands.IdeListOpenTabsCommand(package, runtime, commandService);
         _ = new SearchNavigationCommands.IdeActivateDocumentCommand(package, runtime, commandService);
         _ = new SearchNavigationCommands.IdeCloseDocumentCommand(package, runtime, commandService);
+        _ = new SearchNavigationCommands.IdeCloseFileCommand(package, runtime, commandService);
+        _ = new SearchNavigationCommands.IdeCloseAllExceptCurrentCommand(package, runtime, commandService);
         _ = new SearchNavigationCommands.IdeActivateWindowCommand(package, runtime, commandService);
         _ = new SearchNavigationCommands.IdeListWindowsCommand(package, runtime, commandService);
         _ = new SearchNavigationCommands.IdeExecuteVsCommandCommand(package, runtime, commandService);
         _ = new SearchNavigationCommands.IdeFindAllReferencesCommand(package, runtime, commandService);
         _ = new SearchNavigationCommands.IdeShowCallHierarchyCommand(package, runtime, commandService);
         _ = new SearchNavigationCommands.IdeGetDocumentSliceCommand(package, runtime, commandService);
+        _ = new SearchNavigationCommands.IdeGetSmartContextForQueryCommand(package, runtime, commandService);
+        _ = new PatchCommands.IdeApplyUnifiedDiffCommand(package, runtime, commandService);
 
         _ = new BreakpointCommands.IdeSetBreakpointCommand(package, runtime, commandService);
         _ = new BreakpointCommands.IdeListBreakpointsCommand(package, runtime, commandService);

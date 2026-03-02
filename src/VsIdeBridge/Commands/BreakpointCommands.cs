@@ -29,6 +29,20 @@ internal static class BreakpointCommands
                 args.GetInt32("hit-count", 0),
                 args.GetEnum("hit-type", "none", "none", "equal", "multiple", "greater-or-equal")).ConfigureAwait(true);
 
+            if (args.GetBoolean("reveal", true))
+            {
+                var reveal = await context.Runtime.DocumentService.PositionTextSelectionAsync(
+                    context.Dte,
+                    args.GetRequiredString("file"),
+                    documentQuery: null,
+                    args.GetInt32("line", 1),
+                    args.GetInt32("column", 1),
+                    selectWord: false).ConfigureAwait(true);
+
+                data["revealedInEditor"] = true;
+                data["reveal"] = reveal;
+            }
+
             return new CommandExecutionResult("Breakpoint set.", data);
         }
     }

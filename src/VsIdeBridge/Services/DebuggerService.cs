@@ -6,6 +6,7 @@ using EnvDTE80;
 using Microsoft.VisualStudio.Shell;
 using Newtonsoft.Json.Linq;
 using VsIdeBridge.Infrastructure;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace VsIdeBridge.Services;
 
@@ -46,11 +47,13 @@ internal sealed class DebuggerService
         return data;
     }
 
-    public async Task<JObject> StartAsync(DTE2 dte)
+    public async Task<JObject> StartAsync(DTE2 dte, bool waitForBreak, int timeoutMs)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
         dte.Debugger.Go(false);
-        return await GetStateAsync(dte).ConfigureAwait(true);
+        return waitForBreak
+            ? await WaitForBreakOrDesignModeAsync(dte, timeoutMs, throwOnTimeout: true).ConfigureAwait(true)
+            : await GetStateAsync(dte).ConfigureAwait(true);
     }
 
     public async Task<JObject> StopAsync(DTE2 dte)
@@ -64,38 +67,40 @@ internal sealed class DebuggerService
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
         dte.Debugger.Break(false);
-        return await GetStateAsync(dte).ConfigureAwait(true);
+        return await WaitForBreakOrDesignModeAsync(dte, 10000, throwOnTimeout: true).ConfigureAwait(true);
     }
 
-    public async Task<JObject> ContinueAsync(DTE2 dte)
+    public async Task<JObject> ContinueAsync(DTE2 dte, bool waitForBreak, int timeoutMs)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
         dte.Debugger.Go(false);
-        return await GetStateAsync(dte).ConfigureAwait(true);
+        return waitForBreak
+            ? await WaitForBreakOrDesignModeAsync(dte, timeoutMs, throwOnTimeout: true).ConfigureAwait(true)
+            : await GetStateAsync(dte).ConfigureAwait(true);
     }
 
-    public async Task<JObject> StepOverAsync(DTE2 dte)
+    public async Task<JObject> StepOverAsync(DTE2 dte, int timeoutMs)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
         EnsureBreakMode(dte);
         dte.Debugger.StepOver(false);
-        return await GetStateAsync(dte).ConfigureAwait(true);
+        return await WaitForBreakOrDesignModeAsync(dte, timeoutMs, throwOnTimeout: true).ConfigureAwait(true);
     }
 
-    public async Task<JObject> StepIntoAsync(DTE2 dte)
+    public async Task<JObject> StepIntoAsync(DTE2 dte, int timeoutMs)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
         EnsureBreakMode(dte);
         dte.Debugger.StepInto(false);
-        return await GetStateAsync(dte).ConfigureAwait(true);
+        return await WaitForBreakOrDesignModeAsync(dte, timeoutMs, throwOnTimeout: true).ConfigureAwait(true);
     }
 
-    public async Task<JObject> StepOutAsync(DTE2 dte)
+    public async Task<JObject> StepOutAsync(DTE2 dte, int timeoutMs)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
         EnsureBreakMode(dte);
         dte.Debugger.StepOut(false);
-        return await GetStateAsync(dte).ConfigureAwait(true);
+        return await WaitForBreakOrDesignModeAsync(dte, timeoutMs, throwOnTimeout: true).ConfigureAwait(true);
     }
 
     private static void EnsureBreakMode(DTE2 dte)
@@ -124,5 +129,41 @@ internal sealed class DebuggerService
         lineNumber = selection.ActivePoint.Line;
         columnNumber = selection.ActivePoint.DisplayColumn;
         return !string.IsNullOrWhiteSpace(filePath);
+    }
+
+    private async Task<JObject> WaitForBreakOrDesignModeAsync(DTE2 dte, int timeoutMs, bool throwOnTimeout)
+    {
+        var timeout = timeoutMs <= 0 ? 10000 : timeoutMs;
+        var stopwatch = Stopwatch.StartNew();
+
+        while (true)
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+            var mode = dte.Debugger.CurrentMode;
+            if (mode != dbgDebugMode.dbgRunMode)
+            {
+                var data = await GetStateAsync(dte).ConfigureAwait(true);
+                data["timeoutMs"] = timeout;
+                data["waitedForBreak"] = true;
+                data["timedOut"] = false;
+                return data;
+            }
+
+            if (stopwatch.ElapsedMilliseconds >= timeout)
+            {
+                if (throwOnTimeout)
+                {
+                    throw new CommandErrorException("timeout", $"Debugger did not reach break or design mode within {timeout} ms.");
+                }
+
+                var data = await GetStateAsync(dte).ConfigureAwait(true);
+                data["timeoutMs"] = timeout;
+                data["waitedForBreak"] = true;
+                data["timedOut"] = true;
+                return data;
+            }
+
+            await Task.Delay(100).ConfigureAwait(true);
+        }
     }
 }

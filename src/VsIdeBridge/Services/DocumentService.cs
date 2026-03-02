@@ -13,6 +13,26 @@ namespace VsIdeBridge.Services;
 
 internal sealed class DocumentService
 {
+    public async Task<JObject> ListOpenTabsAsync(DTE2 dte)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        var activePath = dte.ActiveDocument?.FullName;
+        var documents = EnumerateOpenDocuments(dte);
+        var items = new JArray();
+        for (var i = 0; i < documents.Count; i++)
+        {
+            items.Add(CreateDocumentInfo(documents[i], activePath, i + 1));
+        }
+
+        return new JObject
+        {
+            ["count"] = items.Count,
+            ["activePath"] = string.IsNullOrWhiteSpace(activePath) ? string.Empty : PathNormalization.NormalizeFilePath(activePath),
+            ["items"] = items,
+        };
+    }
+
     public async Task<JObject> ListOpenDocumentsAsync(DTE2 dte)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
@@ -20,7 +40,7 @@ internal sealed class DocumentService
         var activePath = dte.ActiveDocument?.FullName;
         var items = new JArray(
             EnumerateOpenDocuments(dte)
-                .Select(document => CreateDocumentInfo(document, activePath)));
+                .Select((document, index) => CreateDocumentInfo(document, activePath, index + 1)));
 
         return new JObject
         {
@@ -46,6 +66,7 @@ internal sealed class DocumentService
         {
             var selection = textDocument.Selection;
             selection.MoveToLineAndOffset(Math.Max(1, line), Math.Max(1, column), false);
+            TryShowActivePoint(selection);
         }
 
         return new JObject
@@ -107,9 +128,11 @@ internal sealed class DocumentService
         var targetLine = Math.Max(1, line ?? selection.ActivePoint.Line);
         var targetColumn = Math.Max(1, column ?? selection.ActivePoint.DisplayColumn);
         selection.MoveToLineAndOffset(targetLine, targetColumn, false);
+        TryShowActivePoint(selection);
         if (selectWord)
         {
             TrySelectCurrentWord(selection);
+            TryShowActivePoint(selection);
         }
 
         var activeLine = selection.ActivePoint.Line;
@@ -158,6 +181,56 @@ internal sealed class DocumentService
         {
             ["query"] = query ?? string.Empty,
             ["matchedBy"] = match.MatchedBy,
+            ["saveChanges"] = saveChanges,
+            ["count"] = closed.Count,
+            ["items"] = closed,
+        };
+    }
+
+    public async Task<JObject> CloseFileAsync(DTE2 dte, string? filePath, string? query, bool saveChanges)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        string resolvedQuery;
+        if (!string.IsNullOrWhiteSpace(filePath))
+        {
+            resolvedQuery = PathNormalization.NormalizeFilePath(filePath);
+        }
+        else if (!string.IsNullOrWhiteSpace(query))
+        {
+            resolvedQuery = query;
+        }
+        else
+        {
+            throw new CommandErrorException("invalid_arguments", "Specify --file or --query.");
+        }
+
+        return await CloseOpenDocumentsAsync(dte, resolvedQuery, closeAllMatches: false, saveChanges).ConfigureAwait(true);
+    }
+
+    public async Task<JObject> CloseAllExceptCurrentAsync(DTE2 dte, bool saveChanges)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        var activeDocument = dte.ActiveDocument ?? throw new CommandErrorException("document_not_found", "There is no active document.");
+        var activePath = activeDocument.FullName;
+        var documentsToClose = EnumerateOpenDocuments(dte)
+            .Where(document => !string.Equals(
+                PathNormalization.NormalizeFilePath(document.FullName),
+                PathNormalization.NormalizeFilePath(activePath),
+                StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        var closed = new JArray();
+        foreach (var document in documentsToClose)
+        {
+            closed.Add(CreateDocumentInfo(document, activePath));
+            document.Close(saveChanges ? vsSaveChanges.vsSaveChangesYes : vsSaveChanges.vsSaveChangesNo);
+        }
+
+        return new JObject
+        {
+            ["activePath"] = PathNormalization.NormalizeFilePath(activePath),
             ["saveChanges"] = saveChanges,
             ["count"] = closed.Count,
             ["items"] = closed,
@@ -278,6 +351,20 @@ internal sealed class DocumentService
         if (string.IsNullOrWhiteSpace(selection.Text))
         {
             selection.MoveToLineAndOffset(originalLine, originalColumn, false);
+        }
+    }
+
+    private static void TryShowActivePoint(TextSelection selection)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        try
+        {
+            selection.ActivePoint.TryToShow(vsPaneShowHow.vsPaneShowCentered);
+        }
+        catch
+        {
+            // Some editor surfaces may not support viewport repositioning.
         }
     }
 
@@ -411,7 +498,7 @@ internal sealed class DocumentService
         return normalized.Split('\n').ToList();
     }
 
-    private static JObject CreateDocumentInfo(Document document, string? activePath)
+    private static JObject CreateDocumentInfo(Document document, string? activePath, int? tabIndex = null)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
@@ -423,6 +510,7 @@ internal sealed class DocumentService
         {
             ["name"] = document.Name ?? Path.GetFileName(fullName),
             ["path"] = normalizedPath,
+            ["tabIndex"] = tabIndex,
             ["isActive"] = !string.IsNullOrWhiteSpace(normalizedPath) &&
                 string.Equals(normalizedPath, normalizedActivePath, StringComparison.OrdinalIgnoreCase),
             ["saved"] = document.Saved,

@@ -131,6 +131,17 @@
           <LocCanonicalName>.Tools.IdeListDocuments</LocCanonicalName>
         </Strings>
       </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeListOpenTabs" priority="0x021D" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE List Open Tabs</ButtonText>
+          <CommandName>IdeListOpenTabs</CommandName>
+          <CanonicalName>Tools.IdeListOpenTabs</CanonicalName>
+          <LocCanonicalName>.Tools.IdeListOpenTabs</LocCanonicalName>
+        </Strings>
+      </Button>
       <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeActivateDocument" priority="0x0217" type="Button">
         <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
         <CommandFlag>CommandWellOnly</CommandFlag>
@@ -151,6 +162,28 @@
           <CommandName>IdeCloseDocument</CommandName>
           <CanonicalName>Tools.IdeCloseDocument</CanonicalName>
           <LocCanonicalName>.Tools.IdeCloseDocument</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeCloseFile" priority="0x021E" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Close File</ButtonText>
+          <CommandName>IdeCloseFile</CommandName>
+          <CanonicalName>Tools.IdeCloseFile</CanonicalName>
+          <LocCanonicalName>.Tools.IdeCloseFile</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeCloseAllExceptCurrent" priority="0x021F" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Close All Except Current</ButtonText>
+          <CommandName>IdeCloseAllExceptCurrent</CommandName>
+          <CanonicalName>Tools.IdeCloseAllExceptCurrent</CanonicalName>
+          <LocCanonicalName>.Tools.IdeCloseAllExceptCurrent</LocCanonicalName>
         </Strings>
       </Button>
       <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeActivateWindow" priority="0x0205" type="Button">
@@ -217,6 +250,28 @@
           <CommandName>IdeGetDocumentSlice</CommandName>
           <CanonicalName>Tools.IdeGetDocumentSlice</CanonicalName>
           <LocCanonicalName>.Tools.IdeGetDocumentSlice</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeGetSmartContextForQuery" priority="0x0220" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Get Smart Context For Query</ButtonText>
+          <CommandName>IdeGetSmartContextForQuery</CommandName>
+          <CanonicalName>Tools.IdeGetSmartContextForQuery</CanonicalName>
+          <LocCanonicalName>.Tools.IdeGetSmartContextForQuery</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeApplyUnifiedDiff" priority="0x0221" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Apply Unified Diff</ButtonText>
+          <CommandName>IdeApplyUnifiedDiff</CommandName>
+          <CanonicalName>Tools.IdeApplyUnifiedDiff</CanonicalName>
+          <LocCanonicalName>.Tools.IdeApplyUnifiedDiff</LocCanonicalName>
         </Strings>
       </Button>
       <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeSetBreakpoint" priority="0x0206" type="Button">
@@ -405,14 +460,19 @@
       <IDSymbol name="cmdidIdeFindFiles" value="0x0203" />
       <IDSymbol name="cmdidIdeOpenDocument" value="0x0204" />
       <IDSymbol name="cmdidIdeListDocuments" value="0x0216" />
+      <IDSymbol name="cmdidIdeListOpenTabs" value="0x021D" />
       <IDSymbol name="cmdidIdeActivateDocument" value="0x0217" />
       <IDSymbol name="cmdidIdeCloseDocument" value="0x0218" />
+      <IDSymbol name="cmdidIdeCloseFile" value="0x021E" />
+      <IDSymbol name="cmdidIdeCloseAllExceptCurrent" value="0x021F" />
       <IDSymbol name="cmdidIdeActivateWindow" value="0x0205" />
       <IDSymbol name="cmdidIdeListWindows" value="0x0219" />
       <IDSymbol name="cmdidIdeExecuteVsCommand" value="0x021A" />
       <IDSymbol name="cmdidIdeFindAllReferences" value="0x021B" />
       <IDSymbol name="cmdidIdeShowCallHierarchy" value="0x021C" />
       <IDSymbol name="cmdidIdeGetDocumentSlice" value="0x0215" />
+      <IDSymbol name="cmdidIdeGetSmartContextForQuery" value="0x0220" />
+      <IDSymbol name="cmdidIdeApplyUnifiedDiff" value="0x0221" />
       <IDSymbol name="cmdidIdeSetBreakpoint" value="0x0206" />
       <IDSymbol name="cmdidIdeListBreakpoints" value="0x0207" />
       <IDSymbol name="cmdidIdeRemoveBreakpoint" value="0x0208" />
