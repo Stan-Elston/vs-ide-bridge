@@ -2,6 +2,7 @@ using System;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using VsIdeBridge.Services;
 
@@ -10,6 +11,8 @@ namespace VsIdeBridge;
 [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
 [InstalledProductRegistration("VS IDE Bridge", "Scriptable IDE control commands for Visual Studio.", "0.1.0")]
 [ProvideMenuResource("Menus.ctmenu", 1)]
+[ProvideAutoLoad(VSConstants.UICONTEXT.NoSolution_string, PackageAutoLoadFlags.BackgroundLoad)]
+[ProvideAutoLoad(VSConstants.UICONTEXT.SolutionExists_string, PackageAutoLoadFlags.BackgroundLoad)]
 [Guid(PackageGuidString)]
 public sealed class VsIdeBridgePackage : AsyncPackage
 {
@@ -31,6 +34,7 @@ public sealed class VsIdeBridgePackage : AsyncPackage
         try
         {
             _pipeServer = new PipeServerService(this, _runtime);
+            await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
             _pipeServer.Start();
         }
         catch (Exception ex)

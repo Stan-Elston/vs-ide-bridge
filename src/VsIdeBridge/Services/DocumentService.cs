@@ -18,7 +18,7 @@ internal sealed class DocumentService
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
-        var activePath = dte.ActiveDocument?.FullName;
+        var activePath = TryGetDocumentFullName(dte.ActiveDocument);
         var documents = EnumerateOpenDocuments(dte);
         var items = new JArray();
         for (var i = 0; i < documents.Count; i++)
@@ -38,7 +38,7 @@ internal sealed class DocumentService
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
-        var activePath = dte.ActiveDocument?.FullName;
+        var activePath = TryGetDocumentFullName(dte.ActiveDocument);
         var items = new JArray(
             EnumerateOpenDocuments(dte)
                 .Select((document, index) => CreateDocumentInfo(document, activePath, index + 1)));
@@ -74,6 +74,80 @@ internal sealed class DocumentService
         {
             ["resolvedPath"] = normalizedPath,
             ["name"] = Path.GetFileName(normalizedPath),
+            ["line"] = Math.Max(1, line),
+            ["column"] = Math.Max(1, column),
+            ["windowCaption"] = window.Caption,
+        };
+    }
+
+    public async Task<JObject> WriteDocumentTextAsync(
+        DTE2 dte,
+        string filePath,
+        string content,
+        int line,
+        int column,
+        bool saveChanges)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        var normalizedPath = PathNormalization.NormalizeFilePath(filePath);
+        var directory = Path.GetDirectoryName(normalizedPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        if (!File.Exists(normalizedPath))
+        {
+            File.WriteAllText(normalizedPath, string.Empty);
+        }
+
+        var window = dte.ItemOperations.OpenFile(normalizedPath);
+        window.Activate();
+
+        var document = window.Document ?? dte.ActiveDocument
+            ?? throw new CommandErrorException("document_not_found", $"Unable to activate: {normalizedPath}");
+
+        var usedEditorBuffer = false;
+        try
+        {
+            if (document.Object("TextDocument") is TextDocument textDocument)
+            {
+                var start = textDocument.StartPoint.CreateEditPoint();
+                start.ReplaceText(textDocument.EndPoint, content, 0);
+
+                var selection = textDocument.Selection;
+                selection.MoveToLineAndOffset(Math.Max(1, line), Math.Max(1, column), false);
+                TryShowActivePoint(selection);
+                usedEditorBuffer = true;
+            }
+        }
+        catch (COMException)
+        {
+            usedEditorBuffer = false;
+        }
+
+        if (!usedEditorBuffer)
+        {
+            File.WriteAllText(normalizedPath, content);
+            if (window.Document is not null)
+            {
+                window.Document.Close(vsSaveChanges.vsSaveChangesNo);
+                window = dte.ItemOperations.OpenFile(normalizedPath);
+                window.Activate();
+            }
+        }
+
+        if (saveChanges && window.Document is not null)
+        {
+            window.Document.Save();
+        }
+
+        return new JObject
+        {
+            ["resolvedPath"] = normalizedPath,
+            ["editorBacked"] = usedEditorBuffer,
+            ["saved"] = window.Document?.Saved ?? saveChanges,
             ["line"] = Math.Max(1, line),
             ["column"] = Math.Max(1, column),
             ["windowCaption"] = window.Caption,
@@ -168,7 +242,7 @@ internal sealed class DocumentService
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
-        var activePath = dte.ActiveDocument?.FullName;
+        var activePath = TryGetDocumentFullName(dte.ActiveDocument);
         var match = ResolveDocumentMatches(dte, query, fallbackToActive: true, allowMultiple: closeAllMatches);
         var closed = new JArray();
         foreach (var document in match.Documents)
@@ -214,11 +288,16 @@ internal sealed class DocumentService
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
         var activeDocument = dte.ActiveDocument ?? throw new CommandErrorException("document_not_found", "There is no active document.");
-        var activePath = activeDocument.FullName;
+        var activePath = TryGetDocumentFullName(activeDocument);
+        if (string.IsNullOrWhiteSpace(activePath))
+        {
+            throw new CommandErrorException("document_not_found", "The active document does not have a file path.");
+        }
+
         var documentsToClose = EnumerateOpenDocuments(dte)
             .Where(document => !string.Equals(
-                PathNormalization.NormalizeFilePath(document.FullName),
-                PathNormalization.NormalizeFilePath(activePath),
+                TryGetDocumentFullName(document),
+                activePath,
                 StringComparison.OrdinalIgnoreCase))
             .ToList();
 
@@ -408,6 +487,47 @@ internal sealed class DocumentService
         };
     }
 
+    public async Task<JObject> GoToImplementationAsync(
+        DTE2 dte,
+        string? filePath,
+        string? documentQuery,
+        int? line,
+        int? column)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        var sourceLocation = await PositionTextSelectionAsync(dte, filePath, documentQuery, line, column, selectWord: true)
+            .ConfigureAwait(true);
+
+        try
+        {
+            dte.ExecuteCommand("Edit.GoToImplementation", string.Empty);
+            await Task.Delay(500).ConfigureAwait(true);
+        }
+        catch (COMException ex)
+        {
+            throw new CommandErrorException(
+                "unsupported_operation",
+                $"GoToImplementation failed: {ex.Message}");
+        }
+
+        var implementationLocation = await PositionTextSelectionAsync(dte, null, null, null, null, selectWord: false)
+            .ConfigureAwait(true);
+        var sourcePath = (string?)sourceLocation["resolvedPath"] ?? string.Empty;
+        var sourceLine = (int?)sourceLocation["line"] ?? 0;
+        var implementationPath = (string?)implementationLocation["resolvedPath"] ?? string.Empty;
+        var implementationLine = (int?)implementationLocation["line"] ?? 0;
+        var implementationFound = !string.Equals(sourcePath, implementationPath, StringComparison.OrdinalIgnoreCase)
+            || sourceLine != implementationLine;
+
+        return new JObject
+        {
+            ["sourceLocation"] = sourceLocation,
+            ["implementationLocation"] = implementationLocation,
+            ["implementationFound"] = implementationFound,
+        };
+    }
+
     public async Task<JObject> GetDocumentSlicesAsync(DTE2 dte, JArray ranges)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
@@ -418,10 +538,18 @@ internal sealed class DocumentService
             if (rangeToken is not Newtonsoft.Json.Linq.JObject range) continue;
             var file = range["file"]?.Value<string>();
             var line = range["line"]?.Value<int>() ?? 1;
-            var before = range["contextBefore"]?.Value<int>() ?? 0;
-            var after = range["contextAfter"]?.Value<int>() ?? 0;
-            var startLine = Math.Max(1, line - before);
-            var endLine = line + after;
+            var before = range["contextBefore"]?.Value<int>()
+                ?? range["context-before"]?.Value<int>()
+                ?? 0;
+            var after = range["contextAfter"]?.Value<int>()
+                ?? range["context-after"]?.Value<int>()
+                ?? 0;
+            var startLine = range["startLine"]?.Value<int>()
+                ?? range["start-line"]?.Value<int>()
+                ?? Math.Max(1, line - before);
+            var endLine = range["endLine"]?.Value<int>()
+                ?? range["end-line"]?.Value<int>()
+                ?? line + after;
 
             try
             {
@@ -458,27 +586,39 @@ internal sealed class DocumentService
         var sourceLine = (int?)sourceLocation["line"] ?? 0;
         var word = (string?)sourceLocation["selectedText"] ?? string.Empty;
 
-        // Navigate to definition
-        var defResult = await GoToDefinitionAsync(dte, sourcePath, null, sourceLine, (int?)sourceLocation["column"])
-            .ConfigureAwait(true);
-
-        var definitionFound = (bool?)defResult["definitionFound"] == true;
-        var defLocation = defResult["definitionLocation"] as JObject;
+        JObject? defLocation = null;
         JObject? definitionSlice = null;
-
-        if (definitionFound && defLocation is not null)
+        var definitionFound = false;
+        try
         {
-            var defPath = (string?)defLocation["resolvedPath"];
-            var defLine = (int?)defLocation["line"] ?? 0;
-            if (!string.IsNullOrEmpty(defPath) && defLine > 0)
+            var defResult = await GoToDefinitionAsync(dte, sourcePath, null, sourceLine, (int?)sourceLocation["column"])
+                .ConfigureAwait(true);
+
+            definitionFound = (bool?)defResult["definitionFound"] == true;
+            defLocation = defResult["definitionLocation"] as JObject;
+
+            if (definitionFound && defLocation is not null)
             {
-                definitionSlice = await GetDocumentSliceAsync(
-                    dte,
-                    defPath,
-                    Math.Max(1, defLine - 2),
-                    defLine + contextLines,
-                    includeLineNumbers: true).ConfigureAwait(true);
+                var defPath = (string?)defLocation["resolvedPath"];
+                var defLine = (int?)defLocation["line"] ?? 0;
+                if (!string.IsNullOrEmpty(defPath) && defLine > 0)
+                {
+                    definitionSlice = await GetDocumentSliceAsync(
+                        dte,
+                        defPath,
+                        Math.Max(1, defLine - 2),
+                        defLine + contextLines,
+                        includeLineNumbers: true).ConfigureAwait(true);
+                }
             }
+        }
+        finally
+        {
+            await TryRestoreLocationAsync(
+                dte,
+                sourcePath,
+                sourceLine,
+                (int?)sourceLocation["column"] ?? column ?? 1).ConfigureAwait(true);
         }
 
         return new JObject
@@ -551,6 +691,8 @@ internal sealed class DocumentService
         vsCMElement.vsCMElementEnum,
         vsCMElement.vsCMElementNamespace,
         vsCMElement.vsCMElementInterface,
+        vsCMElement.vsCMElementProperty,
+        vsCMElement.vsCMElementVariable,
     };
 
     private static void CollectOutlineSymbols(CodeElement element, JArray symbols, int depth, int maxDepth, string? kindFilter = null)
@@ -569,9 +711,8 @@ internal sealed class DocumentService
 
         if (s_outlineKinds.Contains(kind))
         {
-            var kindName = kind.ToString().Replace("vsCMElement", string.Empty);
-            var matchesFilter = string.IsNullOrWhiteSpace(kindFilter) ||
-                kindName.IndexOf(kindFilter, StringComparison.OrdinalIgnoreCase) >= 0;
+            var kindName = NormalizeOutlineKind(kind);
+            var matchesFilter = MatchesOutlineKind(kindName, kindFilter);
 
             if (matchesFilter)
             {
@@ -601,6 +742,38 @@ internal sealed class DocumentService
         {
             try { CollectOutlineSymbols(child, symbols, depth + 1, maxDepth, kindFilter); } catch { }
         }
+    }
+
+    private static string NormalizeOutlineKind(vsCMElement kind)
+    {
+        return kind switch
+        {
+            vsCMElement.vsCMElementFunction => "function",
+            vsCMElement.vsCMElementClass => "class",
+            vsCMElement.vsCMElementStruct => "struct",
+            vsCMElement.vsCMElementEnum => "enum",
+            vsCMElement.vsCMElementNamespace => "namespace",
+            vsCMElement.vsCMElementInterface => "interface",
+            vsCMElement.vsCMElementProperty => "member",
+            vsCMElement.vsCMElementVariable => "member",
+            _ => kind.ToString().Replace("vsCMElement", string.Empty),
+        };
+    }
+
+    private static bool MatchesOutlineKind(string normalizedKind, string? kindFilter)
+    {
+        if (string.IsNullOrWhiteSpace(kindFilter) ||
+            string.Equals(kindFilter, "all", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return kindFilter.ToLowerInvariant() switch
+        {
+            "type" => normalizedKind is "class" or "struct" or "enum" or "interface",
+            "member" => normalizedKind is "member" or "function",
+            _ => normalizedKind.IndexOf(kindFilter, StringComparison.OrdinalIgnoreCase) >= 0,
+        };
     }
 
     private static string ResolveDocumentPath(DTE2 dte, string? filePath)
@@ -678,7 +851,10 @@ internal sealed class DocumentService
     private static IReadOnlyList<Document> EnumerateOpenDocuments(DTE2 dte)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
-        return dte.Documents.Cast<Document>().Where(document => !string.IsNullOrWhiteSpace(document.FullName)).ToArray();
+        return dte.Documents
+            .Cast<Document>()
+            .Where(document => !string.IsNullOrWhiteSpace(TryGetDocumentFullName(document)))
+            .ToArray();
     }
 
     private static (List<Document> Documents, string MatchedBy) ResolveDocumentMatches(
@@ -793,18 +969,93 @@ internal sealed class DocumentService
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
-        var fullName = document.FullName ?? string.Empty;
+        var fullName = TryGetDocumentFullName(document) ?? string.Empty;
         var normalizedPath = string.IsNullOrWhiteSpace(fullName) ? string.Empty : PathNormalization.NormalizeFilePath(fullName);
         var normalizedActivePath = string.IsNullOrWhiteSpace(activePath) ? string.Empty : PathNormalization.NormalizeFilePath(activePath);
+        var saved = TryGetDocumentSaved(document);
 
         return new JObject
         {
-            ["name"] = document.Name ?? Path.GetFileName(fullName),
+            ["name"] = TryGetDocumentName(document) ?? Path.GetFileName(fullName),
             ["path"] = normalizedPath,
             ["tabIndex"] = tabIndex,
             ["isActive"] = !string.IsNullOrWhiteSpace(normalizedPath) &&
                 string.Equals(normalizedPath, normalizedActivePath, StringComparison.OrdinalIgnoreCase),
-            ["saved"] = document.Saved,
+            ["saved"] = saved.HasValue ? saved.Value : JValue.CreateNull(),
         };
+    }
+
+    private static string? TryGetDocumentFullName(Document? document)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (document is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var fullName = document.FullName;
+            return string.IsNullOrWhiteSpace(fullName) ? null : PathNormalization.NormalizeFilePath(fullName);
+        }
+        catch (COMException)
+        {
+            return null;
+        }
+    }
+
+    private static string? TryGetDocumentName(Document? document)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (document is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return string.IsNullOrWhiteSpace(document.Name) ? null : document.Name;
+        }
+        catch (COMException)
+        {
+            return null;
+        }
+    }
+
+    private static bool? TryGetDocumentSaved(Document? document)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (document is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return document.Saved;
+        }
+        catch (COMException)
+        {
+            return null;
+        }
+    }
+
+    private async Task TryRestoreLocationAsync(DTE2 dte, string? filePath, int? line, int? column)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || !line.HasValue || line.Value <= 0)
+        {
+            return;
+        }
+
+        try
+        {
+            await PositionTextSelectionAsync(dte, filePath, null, line, column, selectWord: false).ConfigureAwait(true);
+        }
+        catch
+        {
+        }
     }
 }

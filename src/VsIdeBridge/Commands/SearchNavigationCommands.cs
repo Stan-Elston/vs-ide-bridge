@@ -23,7 +23,7 @@ internal static class SearchNavigationCommands
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
             var query = args.GetRequiredString("query");
-            var scope = args.GetEnum("scope", "solution", "solution", "project", "document");
+            var scope = args.GetEnum("scope", "solution", "solution", "project", "document", "open");
             var project = args.GetString("project");
             var data = await context.Runtime.SearchService.FindTextAsync(
                 context,
@@ -402,6 +402,32 @@ internal static class SearchNavigationCommands
         }
     }
 
+    internal sealed class IdeGoToImplementationCommand : IdeCommandBase
+    {
+        public IdeGoToImplementationCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+            : base(package, runtime, commandService, 0x022F)
+        {
+        }
+
+        protected override string CanonicalName => "Tools.IdeGoToImplementation";
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            var data = await context.Runtime.DocumentService.GoToImplementationAsync(
+                    context.Dte,
+                    args.GetString("file"),
+                    args.GetString("document"),
+                    args.GetNullableInt32("line"),
+                    args.GetNullableInt32("column"))
+                .ConfigureAwait(true);
+
+            var found = (bool?)data["implementationFound"] == true;
+            return new CommandExecutionResult(
+                found ? "Navigated to implementation." : "Go To Implementation executed (location unchanged).",
+                data);
+        }
+    }
+
     internal sealed class IdeGetFileOutlineCommand : IdeCommandBase
     {
         public IdeGetFileOutlineCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
@@ -435,12 +461,19 @@ internal static class SearchNavigationCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
+            var symbolQuery = args.GetString("query") ?? args.GetString("name");
+            if (string.IsNullOrWhiteSpace(symbolQuery))
+            {
+                throw new CommandErrorException("invalid_arguments", "Missing required argument --query.");
+            }
+
             var data = await context.Runtime.SearchService.SearchSymbolsAsync(
                 context,
-                args.GetRequiredString("name"),
-                args.GetEnum("kind", "all", "all", "function", "class", "struct", "enum", "namespace"),
-                args.GetEnum("scope", "solution", "solution", "project", "document"),
+                symbolQuery!,
+                args.GetEnum("kind", "all", "all", "function", "class", "struct", "enum", "namespace", "interface", "member", "type"),
+                args.GetEnum("scope", "solution", "solution", "project", "document", "open"),
                 args.GetBoolean("match-case", false),
+                args.GetString("project"),
                 args.GetString("path"),
                 args.GetInt32("max", 50)).ConfigureAwait(true);
 
@@ -485,24 +518,66 @@ internal static class SearchNavigationCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var rangesFile = args.GetRequiredString("ranges-file");
-            if (!File.Exists(rangesFile))
-            {
-                throw new CommandErrorException("file_not_found", $"Ranges file not found: {rangesFile}");
-            }
-
             JArray ranges;
-            try
+            var rangesJson = args.GetString("ranges");
+            var rangesFile = args.GetString("ranges-file");
+            if (!string.IsNullOrWhiteSpace(rangesJson))
             {
-                ranges = JArray.Parse(File.ReadAllText(rangesFile));
+                try
+                {
+                    ranges = JArray.Parse(rangesJson);
+                }
+                catch (Exception ex)
+                {
+                    throw new CommandErrorException("invalid_json", $"Failed to parse --ranges JSON: {ex.Message}");
+                }
             }
-            catch (Exception ex)
+            else
             {
-                throw new CommandErrorException("invalid_json", $"Failed to parse ranges file: {ex.Message}");
+                if (string.IsNullOrWhiteSpace(rangesFile))
+                {
+                    throw new CommandErrorException("invalid_arguments", "Specify either --ranges or --ranges-file.");
+                }
+
+                if (!File.Exists(rangesFile))
+                {
+                    throw new CommandErrorException("file_not_found", $"Ranges file not found: {rangesFile}");
+                }
+
+                try
+                {
+                    ranges = JArray.Parse(File.ReadAllText(rangesFile!));
+                }
+                catch (Exception ex)
+                {
+                    throw new CommandErrorException("invalid_json", $"Failed to parse ranges file: {ex.Message}");
+                }
             }
 
             var data = await context.Runtime.DocumentService.GetDocumentSlicesAsync(context.Dte, ranges).ConfigureAwait(true);
             return new CommandExecutionResult($"Captured {data["count"]} slice(s).", data);
+        }
+    }
+
+    internal sealed class IdeGetFileSymbolsCommand : IdeCommandBase
+    {
+        public IdeGetFileSymbolsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+            : base(package, runtime, commandService, 0x022D)
+        {
+        }
+
+        protected override string CanonicalName => "Tools.IdeGetFileSymbols";
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            var data = await context.Runtime.DocumentService.GetFileOutlineAsync(
+                    context.Dte,
+                    args.GetString("file"),
+                    args.GetInt32("max-depth", 8),
+                    args.GetString("kind"))
+                .ConfigureAwait(true);
+
+            return new CommandExecutionResult($"Found {data["count"]} symbol(s).", data);
         }
     }
 }

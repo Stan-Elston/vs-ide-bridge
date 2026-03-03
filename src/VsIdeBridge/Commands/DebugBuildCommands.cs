@@ -9,6 +9,20 @@ namespace VsIdeBridge.Commands;
 
 internal static class DebugBuildCommands
 {
+    private static ErrorListQuery CreateErrorListQuery(CommandArguments args, string? defaultSeverity = null)
+    {
+        return new ErrorListQuery
+        {
+            Severity = args.GetString("severity") ?? defaultSeverity,
+            Code = args.GetString("code"),
+            Project = args.GetString("project"),
+            Path = args.GetString("path"),
+            Text = args.GetString("text"),
+            GroupBy = args.GetString("group-by"),
+            Max = args.GetNullableInt32("max"),
+        };
+    }
+
     internal sealed class IdeDebugGetStateCommand : IdeCommandBase
     {
         public IdeDebugGetStateCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
@@ -185,9 +199,32 @@ internal static class DebugBuildCommands
                 context,
                 args.GetBoolean("wait-for-intellisense", true),
                 args.GetInt32("timeout-ms", 120000),
-                args.GetBoolean("quick", false)).ConfigureAwait(true);
+                args.GetBoolean("quick", false),
+                CreateErrorListQuery(args)).ConfigureAwait(true);
 
             return new CommandExecutionResult($"Captured {data["count"]} Error List row(s).", data);
+        }
+    }
+
+    internal sealed class IdeGetWarningsCommand : IdeCommandBase
+    {
+        public IdeGetWarningsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+            : base(package, runtime, commandService, 0x0230)
+        {
+        }
+
+        protected override string CanonicalName => "Tools.IdeGetWarnings";
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            var data = await context.Runtime.ErrorListService.GetErrorListAsync(
+                context,
+                args.GetBoolean("wait-for-intellisense", true),
+                args.GetInt32("timeout-ms", 120000),
+                args.GetBoolean("quick", false),
+                CreateErrorListQuery(args, "warning")).ConfigureAwait(true);
+
+            return new CommandExecutionResult($"Captured {data["count"]} warning row(s).", data);
         }
     }
 
@@ -210,7 +247,8 @@ internal static class DebugBuildCommands
             var errors = await context.Runtime.ErrorListService.GetErrorListAsync(
                 context,
                 false,
-                timeout).ConfigureAwait(true);
+                timeout,
+                query: CreateErrorListQuery(args)).ConfigureAwait(true);
 
             var data = new JObject
             {

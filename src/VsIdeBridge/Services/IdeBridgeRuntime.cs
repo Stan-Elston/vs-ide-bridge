@@ -13,7 +13,10 @@ internal sealed class IdeBridgeRuntime
 {
     private IdeBridgeRuntime(
         OutputPaneLogger logger,
+        BridgeInstanceService bridgeInstanceService,
+        BridgeUiSettingsService uiSettings,
         IdeStateService ideStateService,
+        FailureContextService failureContextService,
         ReadinessService readinessService,
         SearchService searchService,
         DocumentService documentService,
@@ -26,7 +29,10 @@ internal sealed class IdeBridgeRuntime
         ErrorListService errorListService)
     {
         Logger = logger;
+        BridgeInstanceService = bridgeInstanceService;
+        UiSettings = uiSettings;
         IdeStateService = ideStateService;
+        FailureContextService = failureContextService;
         ReadinessService = readinessService;
         SearchService = searchService;
         DocumentService = documentService;
@@ -41,7 +47,13 @@ internal sealed class IdeBridgeRuntime
 
     public OutputPaneLogger Logger { get; }
 
+    public BridgeInstanceService BridgeInstanceService { get; }
+
+    public BridgeUiSettingsService UiSettings { get; }
+
     public IdeStateService IdeStateService { get; }
+
+    public FailureContextService FailureContextService { get; }
 
     public ReadinessService ReadinessService { get; }
 
@@ -66,7 +78,14 @@ internal sealed class IdeBridgeRuntime
     private readonly Dictionary<string, IdeCommandBase> _dispatcher =
         new(StringComparer.OrdinalIgnoreCase);
 
-    internal void RegisterCommand(IdeCommandBase cmd) => _dispatcher[cmd.Name] = cmd;
+    internal void RegisterCommand(IdeCommandBase cmd)
+    {
+        _dispatcher[cmd.Name] = cmd;
+        foreach (var alias in PipeCommandNames.GetAliases(cmd.Name))
+        {
+            _dispatcher[alias] = cmd;
+        }
+    }
 
     internal bool TryGetCommand(string name, out IdeCommandBase cmd)
         => _dispatcher.TryGetValue(name, out cmd!);
@@ -78,7 +97,10 @@ internal sealed class IdeBridgeRuntime
         Assumes.Present(dte);
 
         var logger = new OutputPaneLogger(package, dte);
+        var bridgeInstanceService = new BridgeInstanceService();
+        var uiSettings = new BridgeUiSettingsService(package);
         var documentService = new DocumentService();
+        var failureContextService = new FailureContextService();
         var readinessService = new ReadinessService();
         var searchService = new SearchService();
         var errorListService = new ErrorListService(readinessService);
@@ -86,7 +108,10 @@ internal sealed class IdeBridgeRuntime
 
         return new IdeBridgeRuntime(
             logger,
-            new IdeStateService(),
+            bridgeInstanceService,
+            uiSettings,
+            new IdeStateService(bridgeInstanceService),
+            failureContextService,
             readinessService,
             searchService,
             documentService,

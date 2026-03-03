@@ -52,8 +52,20 @@ internal static class CommandArgumentParser
         var buffer = new StringBuilder();
         var inQuotes = false;
 
-        foreach (var ch in text)
+        for (var i = 0; i < text.Length; i++)
         {
+            var ch = text[i];
+            if (ch == '\\' && i + 1 < text.Length)
+            {
+                var next = text[i + 1];
+                if (next == '"' || next == '\\')
+                {
+                    buffer.Append(next);
+                    i++;
+                    continue;
+                }
+            }
+
             if (ch == '"')
             {
                 inQuotes = !inQuotes;

@@ -1,9 +1,8 @@
 using System;
-using System.Threading;
 using System.Threading.Tasks;
-using EnvDTE80;
 using Microsoft.VisualStudio.OperationProgress;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
 using Newtonsoft.Json.Linq;
 using VsIdeBridge.Infrastructure;
 
@@ -11,6 +10,9 @@ namespace VsIdeBridge.Services;
 
 internal sealed class ReadinessService
 {
+    private const int PollIntervalMilliseconds = 500;
+    private const int StableStatusBarSampleCount = 2;
+
     public async Task<JObject> WaitForReadyAsync(IdeCommandContext context, int timeoutMilliseconds)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
@@ -23,45 +25,87 @@ internal sealed class ReadinessService
         var startedAt = DateTimeOffset.UtcNow;
         var timeout = TimeSpan.FromMilliseconds(timeoutMilliseconds <= 0 ? 120000 : timeoutMilliseconds);
         var service = await context.Package.GetServiceAsync(typeof(SVsOperationProgressStatusService)).ConfigureAwait(true) as IVsOperationProgressStatusService;
-        if (service is null)
+        var stage = service?.GetStageStatusForSolutionLoad(CommonOperationProgressStageIds.Intellisense);
+        var statusbar = await context.Package.GetServiceAsync(typeof(SVsStatusbar)).ConfigureAwait(true) as IVsStatusbar;
+        var deadline = startedAt.Add(timeout);
+        var readyStatusSamples = 0;
+        var lastStatusBarText = string.Empty;
+        var statusBarReady = false;
+        var intellisenseCompleted = stage is not null && !stage.IsInProgress;
+        var satisfiedBy = intellisenseCompleted ? "intellisense" : "pending";
+
+        while (DateTimeOffset.UtcNow < deadline)
         {
-            return new JObject
+            context.CancellationToken.ThrowIfCancellationRequested();
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
+
+            if (stage is not null)
             {
-                ["solutionPath"] = context.Dte.Solution.FullName,
-                ["serviceAvailable"] = false,
-                ["intellisenseCompleted"] = false,
-                ["timedOut"] = false,
-            };
+                intellisenseCompleted = !stage.IsInProgress;
+                if (intellisenseCompleted)
+                {
+                    satisfiedBy = "intellisense";
+                    break;
+                }
+            }
+
+            lastStatusBarText = TryGetStatusBarText(statusbar);
+            statusBarReady = IsReadyStatusText(lastStatusBarText);
+            readyStatusSamples = statusBarReady ? readyStatusSamples + 1 : 0;
+            if (readyStatusSamples >= StableStatusBarSampleCount)
+            {
+                satisfiedBy = "status-bar";
+                break;
+            }
+
+            await Task.Delay(PollIntervalMilliseconds, context.CancellationToken).ConfigureAwait(false);
         }
 
-        var stage = service.GetStageStatusForSolutionLoad(CommonOperationProgressStageIds.Intellisense);
-        if (stage is null)
+        var timedOut = satisfiedBy == "pending";
+        if (timedOut)
         {
-            return new JObject
-            {
-                ["solutionPath"] = context.Dte.Solution.FullName,
-                ["serviceAvailable"] = true,
-                ["intellisenseCompleted"] = false,
-                ["timedOut"] = false,
-            };
-        }
-
-        var waitTask = stage.WaitForCompletionAsync();
-        var completedTask = await Task.WhenAny(waitTask, Task.Delay(timeout, context.CancellationToken)).ConfigureAwait(false);
-        var timedOut = completedTask != waitTask;
-        if (!timedOut)
-        {
-            await waitTask.ConfigureAwait(false);
+            satisfiedBy = "timeout";
         }
 
         return new JObject
         {
             ["solutionPath"] = context.Dte.Solution.FullName,
-            ["serviceAvailable"] = true,
-            ["intellisenseCompleted"] = !timedOut,
+            ["serviceAvailable"] = service is not null,
+            ["intellisenseStageAvailable"] = stage is not null,
+            ["intellisenseCompleted"] = intellisenseCompleted,
             ["timedOut"] = timedOut,
             ["elapsedMilliseconds"] = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds,
-            ["isInProgress"] = stage.IsInProgress,
+            ["isInProgress"] = stage?.IsInProgress ?? false,
+            ["statusBarAvailable"] = statusbar is not null,
+            ["statusBarText"] = lastStatusBarText,
+            ["statusBarReady"] = statusBarReady,
+            ["readyStatusSamples"] = readyStatusSamples,
+            ["satisfiedBy"] = satisfiedBy,
         };
+    }
+
+    private static string TryGetStatusBarText(IVsStatusbar? statusbar)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (statusbar is null)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            statusbar.GetText(out var text);
+            return text?.Trim() ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static bool IsReadyStatusText(string text)
+    {
+        return string.Equals(text?.Trim(), "Ready", StringComparison.OrdinalIgnoreCase);
     }
 }

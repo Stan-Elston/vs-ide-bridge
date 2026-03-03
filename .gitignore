@@ -4,3 +4,5 @@ src/IdeBridgeJsonProbe/bin/
 src/IdeBridgeJsonProbe/obj/
 src/VsIdeBridge/bin/
 src/VsIdeBridge/obj/
+src/VsIdeBridgeCli/bin/
+src/VsIdeBridgeCli/obj/

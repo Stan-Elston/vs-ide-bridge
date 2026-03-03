@@ -20,12 +20,16 @@ internal sealed class OutputPaneLogger
         _dte = dte;
     }
 
-    public async Task LogAsync(string message, CancellationToken cancellationToken)
+    public async Task LogAsync(string message, CancellationToken cancellationToken, bool activatePane = false)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
 
         var pane = GetOrCreatePane();
         pane.OutputString($"{message}{Environment.NewLine}");
+        if (activatePane)
+        {
+            pane.Activate();
+        }
 
         if (await _package.GetServiceAsync(typeof(SVsStatusbar)).ConfigureAwait(true) is IVsStatusbar statusbar)
         {

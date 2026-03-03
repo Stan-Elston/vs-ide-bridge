@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -11,13 +12,21 @@ namespace VsIdeBridge.Services;
 
 internal sealed class IdeStateService
 {
+    private readonly BridgeInstanceService _bridgeInstanceService;
+
+    public IdeStateService(BridgeInstanceService bridgeInstanceService)
+    {
+        _bridgeInstanceService = bridgeInstanceService;
+    }
+
     public async Task<JObject> GetStateAsync(EnvDTE80.DTE2 dte)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
+        var solutionPath = dte.Solution?.IsOpen == true ? PathNormalization.NormalizeFilePath(dte.Solution.FullName) : string.Empty;
         var data = new JObject
         {
-            ["solutionPath"] = dte.Solution?.IsOpen == true ? PathNormalization.NormalizeFilePath(dte.Solution.FullName) : string.Empty,
+            ["solutionPath"] = solutionPath,
             ["solutionName"] = dte.Solution?.IsOpen == true ? Path.GetFileName(dte.Solution.FullName) : string.Empty,
             ["solutionDirectory"] = dte.Solution?.IsOpen == true ? Path.GetDirectoryName(dte.Solution.FullName) ?? string.Empty : string.Empty,
             ["debugMode"] = dte.Debugger.CurrentMode.ToString(),
@@ -28,11 +37,11 @@ internal sealed class IdeStateService
                 .Where(document => !string.IsNullOrWhiteSpace(document.FullName))
                 .Select(document => PathNormalization.NormalizeFilePath(document.FullName))),
             ["startupProjects"] = GetStartupProjects(dte),
+            ["bridge"] = _bridgeInstanceService.CreateStateData(solutionPath),
         };
 
-        if (dte.ActiveDocument?.Object("TextDocument") is TextDocument textDocument)
+        if (TryGetActiveTextSelection(dte.ActiveDocument, out var selection))
         {
-            var selection = textDocument.Selection;
             data["caretLine"] = selection.ActivePoint.Line;
             data["caretColumn"] = selection.ActivePoint.DisplayColumn;
             data["selectionStartLine"] = selection.TopPoint.Line;
@@ -49,6 +58,32 @@ internal sealed class IdeStateService
         }
 
         return data;
+    }
+
+    private static bool TryGetActiveTextSelection(Document? document, out TextSelection selection)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        selection = null!;
+        if (document is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            if (document.Object("TextDocument") is not TextDocument textDocument)
+            {
+                return false;
+            }
+
+            selection = textDocument.Selection;
+            return selection is not null;
+        }
+        catch (COMException)
+        {
+            return false;
+        }
     }
 
     private static JArray GetStartupProjects(DTE2 dte)

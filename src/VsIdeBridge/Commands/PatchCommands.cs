@@ -20,6 +20,13 @@ internal static class PatchCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
+            if (!context.Runtime.UiSettings.AllowBridgeEdits)
+            {
+                throw new CommandErrorException(
+                    "edits_disabled",
+                    "Bridge edits are disabled. Enable IDE Bridge > Allow Bridge Edits before applying changes.");
+            }
+
             string? patchText = null;
             var patchTextBase64 = args.GetString("patch-text-base64");
             if (!string.IsNullOrWhiteSpace(patchTextBase64))
@@ -37,13 +44,18 @@ internal static class PatchCommands
                 }
             }
 
+            var openChangedFiles = args.Has("open-changed-files")
+                ? args.GetBoolean("open-changed-files", context.Runtime.UiSettings.GoToEditedParts)
+                : context.Runtime.UiSettings.GoToEditedParts;
+
             var data = await context.Runtime.PatchService.ApplyUnifiedDiffAsync(
                 context.Dte,
                 context.Runtime.DocumentService,
                 args.GetString("patch-file"),
                 patchText,
                 args.GetString("base-directory"),
-                args.GetBoolean("open-changed-files", true)).ConfigureAwait(true);
+                openChangedFiles,
+                args.GetBoolean("save-changed-files", false)).ConfigureAwait(true);
 
             return new CommandExecutionResult($"Applied unified diff to {data["count"]} file(s).", data);
         }

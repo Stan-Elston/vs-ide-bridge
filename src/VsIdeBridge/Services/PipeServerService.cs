@@ -11,6 +11,7 @@ using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using VsIdeBridge.Commands;
 using VsIdeBridge.Infrastructure;
 
 namespace VsIdeBridge.Services;
@@ -24,7 +25,6 @@ internal sealed class PipeServerService : IDisposable
 {
     private readonly VsIdeBridgePackage _package;
     private readonly IdeBridgeRuntime _runtime;
-    private readonly string _pipeName;
     private readonly string _discoveryFile;
     private readonly CancellationTokenSource _cts = new CancellationTokenSource();
     private Task? _listenTask;
@@ -33,19 +33,89 @@ internal sealed class PipeServerService : IDisposable
     {
         _package = package;
         _runtime = runtime;
-        var pid = Process.GetCurrentProcess().Id;
-        _pipeName = $"VsIdeBridge18_{pid}";
         var discoveryDir = Path.Combine(Path.GetTempPath(), "vs-ide-bridge", "pipes");
         Directory.CreateDirectory(discoveryDir);
-        _discoveryFile = Path.Combine(discoveryDir, $"bridge-{pid}.json");
+        _discoveryFile = Path.Combine(discoveryDir, $"bridge-{runtime.BridgeInstanceService.ProcessId}.json");
     }
 
     public void Start()
     {
-        var pid = Process.GetCurrentProcess().Id;
-        var discoveryJson = JsonConvert.SerializeObject(new { pid, pipeName = _pipeName });
-        File.WriteAllText(_discoveryFile, discoveryJson, new UTF8Encoding(false));
+        WriteDiscoveryFile(string.Empty);
+        _package.JoinableTaskFactory.RunAsync(async delegate
+        {
+            try
+            {
+                await _package.JoinableTaskFactory.SwitchToMainThreadAsync(_cts.Token);
+                var dte = await _package.GetServiceAsync(typeof(SDTE)).ConfigureAwait(true) as DTE2;
+                if (dte != null)
+                {
+                    WriteDiscoveryFile(GetSolutionPath(dte));
+                }
+            }
+            catch (Exception ex)
+            {
+                ActivityLog.LogWarning(nameof(PipeServerService), $"Initial discovery refresh failed: {ex.Message}");
+            }
+        });
         _listenTask = Task.Run(() => ListenLoopAsync(_cts.Token));
+    }
+
+    private void WriteDiscoveryFile(string? solutionPath)
+    {
+        try
+        {
+            var discoveryJson = JsonConvert.SerializeObject(_runtime.BridgeInstanceService.CreateDiscoveryRecord(solutionPath));
+            File.WriteAllText(_discoveryFile, discoveryJson, new UTF8Encoding(false));
+        }
+        catch (Exception ex)
+        {
+            ActivityLog.LogWarning(nameof(PipeServerService), $"Failed to update discovery file: {ex.Message}");
+        }
+    }
+
+    private static string GetSolutionPath(DTE2 dte)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        try
+        {
+            return dte.Solution?.FullName ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static JArray BuildBatchSteps(PipeRequest request)
+    {
+        var steps = new JArray();
+        if (request.Batch == null)
+        {
+            return steps;
+        }
+
+        foreach (var batchRequest in request.Batch)
+        {
+            steps.Add(new JObject
+            {
+                ["id"] = batchRequest.Id is null ? JValue.CreateNull() : batchRequest.Id,
+                ["command"] = batchRequest.Command ?? string.Empty,
+                ["args"] = batchRequest.Args ?? string.Empty,
+            });
+        }
+
+        return steps;
+    }
+
+    private static bool ShouldRevealActivity(string commandName)
+    {
+        return string.Equals(commandName, "Tools.IdeApplyUnifiedDiff", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(commandName, "apply-diff", StringComparison.OrdinalIgnoreCase)
+            || commandName.IndexOf("Build", StringComparison.OrdinalIgnoreCase) >= 0
+            || commandName.IndexOf("Debug", StringComparison.OrdinalIgnoreCase) >= 0
+            || commandName.IndexOf("Open", StringComparison.OrdinalIgnoreCase) >= 0
+            || commandName.IndexOf("Close", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     private async Task ListenLoopAsync(CancellationToken ct)
@@ -56,7 +126,7 @@ internal sealed class PipeServerService : IDisposable
             try
             {
                 pipe = new NamedPipeServerStream(
-                    _pipeName,
+                    _runtime.BridgeInstanceService.PipeName,
                     PipeDirection.InOut,
                     NamedPipeServerStream.MaxAllowedServerInstances,
                     PipeTransmissionMode.Byte,
@@ -132,6 +202,7 @@ internal sealed class PipeServerService : IDisposable
         var startedAt = DateTimeOffset.UtcNow;
         string commandName = "";
         string? requestId = null;
+        IdeCommandContext? failureContext = null;
 
         try
         {
@@ -140,12 +211,10 @@ internal sealed class PipeServerService : IDisposable
                 throw new CommandErrorException("invalid_request", "Could not parse request JSON.");
 
             requestId = request.Id;
-            commandName = request.Command ?? "";
-
-            if (!_runtime.TryGetCommand(commandName, out var cmd))
-                throw new CommandErrorException("command_not_found", $"Unknown command: '{commandName}'.");
-
-            var args = CommandArgumentParser.Parse(request.Args);
+            var hasBatch = request.Batch is { Count: > 0 };
+            commandName = hasBatch
+                ? (!string.IsNullOrWhiteSpace(request.Command) ? request.Command : "Tools.IdeBatchCommands")
+                : (request.Command ?? string.Empty);
 
             CommandExecutionResult result = null!;
             await _package.JoinableTaskFactory.RunAsync(async delegate
@@ -153,23 +222,46 @@ internal sealed class PipeServerService : IDisposable
                 await _package.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
                 var dte = await _package.GetServiceAsync(typeof(SDTE)).ConfigureAwait(true) as DTE2;
                 Assumes.Present(dte);
+                WriteDiscoveryFile(GetSolutionPath(dte!));
                 var ctx = new IdeCommandContext(_package, dte!, _runtime.Logger, _runtime, ct);
+                failureContext = ctx;
+                await _runtime.Logger.LogAsync($"IDE Bridge: {commandName} requested", ct).ConfigureAwait(true);
+
+                if (hasBatch)
+                {
+                    var steps = BuildBatchSteps(request);
+                    result = await IdeCoreCommands.ExecuteBatchAsync(ctx, steps, request.StopOnError ?? false).ConfigureAwait(true);
+                    return;
+                }
+
+                if (!_runtime.TryGetCommand(commandName, out var cmd))
+                    throw new CommandErrorException("command_not_found", $"Unknown command: '{commandName}'.");
+
+                var args = CommandArgumentParser.Parse(request.Args);
                 result = await cmd.ExecuteDirectAsync(ctx, args).ConfigureAwait(true);
             });
 
+            await _runtime.Logger.LogAsync(
+                $"IDE Bridge: {commandName} OK - {result.Summary}",
+                ct,
+                activatePane: ShouldRevealActivity(commandName)).ConfigureAwait(false);
             var envelope = BuildEnvelope(commandName, requestId, true, result.Summary, result.Data, result.Warnings, null, startedAt);
             return JsonConvert.SerializeObject(envelope);
         }
         catch (CommandErrorException ex)
         {
+            await _runtime.Logger.LogAsync($"IDE Bridge: {commandName} FAIL - {ex.Code}", ct, activatePane: true).ConfigureAwait(false);
             var errorObj = new { code = ex.Code, message = ex.Message, details = ex.Details };
-            var envelope = BuildEnvelope(commandName, requestId, false, ex.Message, new JObject(), new JArray(), errorObj, startedAt);
+            var failureData = await _runtime.FailureContextService.CaptureAsync(failureContext).ConfigureAwait(false);
+            var envelope = BuildEnvelope(commandName, requestId, false, ex.Message, failureData, new JArray(), errorObj, startedAt);
             return JsonConvert.SerializeObject(envelope);
         }
         catch (Exception ex)
         {
+            await _runtime.Logger.LogAsync($"IDE Bridge: {commandName} FAIL - internal_error", ct, activatePane: true).ConfigureAwait(false);
             var errorObj = new { code = "internal_error", message = ex.Message, details = new { exception = ex.ToString() } };
-            var envelope = BuildEnvelope(commandName, requestId, false, ex.Message, new JObject(), new JArray(), errorObj, startedAt);
+            var failureData = await _runtime.FailureContextService.CaptureAsync(failureContext).ConfigureAwait(false);
+            var envelope = BuildEnvelope(commandName, requestId, false, ex.Message, failureData, new JArray(), errorObj, startedAt);
             return JsonConvert.SerializeObject(envelope);
         }
     }

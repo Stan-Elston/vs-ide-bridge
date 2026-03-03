@@ -21,6 +21,11 @@ internal sealed class CommandArguments
             : defaultValue;
     }
 
+    public bool Has(string name)
+    {
+        return _values.ContainsKey(name);
+    }
+
     public string GetRequiredString(string name)
     {
         var value = GetString(name);

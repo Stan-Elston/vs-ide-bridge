@@ -38,6 +38,29 @@ internal sealed class SearchService
         public List<string> SourceQueries { get; set; } = new List<string>();
     }
 
+    private sealed class CodeModelHit
+    {
+        public string Path { get; set; } = string.Empty;
+
+        public string ProjectUniqueName { get; set; } = string.Empty;
+
+        public string Name { get; set; } = string.Empty;
+
+        public string FullName { get; set; } = string.Empty;
+
+        public string Kind { get; set; } = string.Empty;
+
+        public string Signature { get; set; } = string.Empty;
+
+        public int Line { get; set; }
+
+        public int EndLine { get; set; }
+
+        public int Score { get; set; }
+
+        public string MatchKind { get; set; } = string.Empty;
+    }
+
     private sealed class SmartQueryTerm
     {
         public string Text { get; set; } = string.Empty;
@@ -46,6 +69,18 @@ internal sealed class SearchService
 
         public bool WholeWord { get; set; }
     }
+
+    private static readonly HashSet<vsCMElement> s_codeModelKinds = new()
+    {
+        vsCMElement.vsCMElementFunction,
+        vsCMElement.vsCMElementClass,
+        vsCMElement.vsCMElementStruct,
+        vsCMElement.vsCMElementEnum,
+        vsCMElement.vsCMElementNamespace,
+        vsCMElement.vsCMElementInterface,
+        vsCMElement.vsCMElementProperty,
+        vsCMElement.vsCMElementVariable,
+    };
 
     public async Task<JObject> FindFilesAsync(IdeCommandContext context, string query)
     {
@@ -109,9 +144,39 @@ internal sealed class SearchService
         string kind,
         string scope,
         bool matchCase,
+        string? projectUniqueName,
         string? pathFilter,
         int max)
     {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
+
+        var codeModelHits = SearchCodeModelSymbols(
+            context.Dte,
+            name,
+            kind,
+            scope,
+            matchCase,
+            projectUniqueName,
+            pathFilter)
+            .Take(Math.Max(1, max))
+            .ToArray();
+
+        if (codeModelHits.Length > 0)
+        {
+            return new JObject
+            {
+                ["query"] = name,
+                ["kind"] = kind,
+                ["scope"] = scope,
+                ["project"] = projectUniqueName ?? string.Empty,
+                ["pathFilter"] = pathFilter ?? string.Empty,
+                ["count"] = codeModelHits.Length,
+                ["totalMatchCount"] = codeModelHits.Length,
+                ["source"] = "code-model",
+                ["matches"] = new JArray(codeModelHits.Select(SerializeCodeModelHit)),
+            };
+        }
+
         // Build a regex pattern targeting definition signatures for the requested kind.
         var escaped = Regex.Escape(name);
         string pattern;
@@ -138,6 +203,18 @@ internal sealed class SearchService
                 pattern = $@"\bnamespace\s+{escaped}\b";
                 resolvedKind = "namespace";
                 break;
+            case "interface":
+                pattern = $@"\binterface\s+{escaped}\b";
+                resolvedKind = "interface";
+                break;
+            case "member":
+                pattern = $@"\b{escaped}\b";
+                resolvedKind = "member";
+                break;
+            case "type":
+                pattern = $@"\b{escaped}\b";
+                resolvedKind = "type";
+                break;
             default:
                 // "all" — whole-word match; kind is inferred per-hit
                 pattern = $@"\b{escaped}\b";
@@ -152,7 +229,7 @@ internal sealed class SearchService
             matchCase,
             wholeWord: false,
             useRegex: true,
-            projectUniqueName: null,
+            projectUniqueName,
             pathFilter).ConfigureAwait(true);
 
         // Annotate each hit with an inferred kind and cap at max
@@ -174,9 +251,11 @@ internal sealed class SearchService
             ["query"] = name,
             ["kind"] = kind,
             ["scope"] = scope,
+            ["project"] = projectUniqueName ?? string.Empty,
             ["pathFilter"] = pathFilter ?? string.Empty,
             ["count"] = hits.Length,
             ["totalMatchCount"] = searchData.Matches.Count,
+            ["source"] = "text",
             ["matches"] = new JArray(hits),
         };
     }
@@ -193,6 +272,8 @@ internal sealed class SearchService
             return "enum";
         if (Regex.IsMatch(trimmed, $@"\bnamespace\s+{Regex.Escape(name)}\b", RegexOptions.IgnoreCase))
             return "namespace";
+        if (Regex.IsMatch(trimmed, $@"\binterface\s+{Regex.Escape(name)}\b", RegexOptions.IgnoreCase))
+            return "interface";
         // Function: name followed by (
         if (Regex.IsMatch(trimmed, $@"\b{Regex.Escape(name)}\s*\(", RegexOptions.IgnoreCase))
             return "function";
@@ -328,6 +409,7 @@ internal sealed class SearchService
         var allFiles = scope switch
         {
             "document" => new[] { await GetDocumentTargetAsync(context).ConfigureAwait(true) },
+            "open" => EnumerateOpenFiles(context.Dte).ToArray(),
             "project" => EnumerateSolutionFiles(context.Dte)
                 .Where(item => string.Equals(item.ProjectUniqueName, projectUniqueName, StringComparison.OrdinalIgnoreCase))
                 .ToArray(),
@@ -349,7 +431,7 @@ internal sealed class SearchService
                 continue;
             }
 
-            var lines = File.ReadAllLines(file.Path);
+            var lines = ReadSearchLines(context.Dte, file.Path);
             for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
             {
                 var line = lines[lineIndex];
@@ -591,6 +673,26 @@ internal sealed class SearchService
         };
     }
 
+    private static JObject SerializeCodeModelHit(CodeModelHit hit)
+    {
+        return new JObject
+        {
+            ["name"] = hit.Name,
+            ["fullName"] = hit.FullName,
+            ["kind"] = hit.Kind,
+            ["signature"] = hit.Signature,
+            ["path"] = hit.Path,
+            ["project"] = hit.ProjectUniqueName,
+            ["line"] = hit.Line,
+            ["column"] = 1,
+            ["endLine"] = hit.EndLine,
+            ["matchKind"] = hit.MatchKind,
+            ["scoreHint"] = hit.Score,
+            ["preview"] = hit.Signature,
+            ["source"] = "code-model",
+        };
+    }
+
     private static IReadOnlyList<SmartQueryTerm> ExtractSmartQueryTerms(string query)
     {
         var terms = new List<SmartQueryTerm>();
@@ -655,14 +757,318 @@ internal sealed class SearchService
 
     private async Task<(string Path, string ProjectUniqueName)> GetDocumentTargetAsync(IdeCommandContext context)
     {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
+
         var activeDocument = context.Dte.ActiveDocument;
         if (activeDocument is null || string.IsNullOrWhiteSpace(activeDocument.FullName))
         {
             throw new CommandErrorException("document_not_found", "There is no active document.");
         }
 
-        await Task.CompletedTask;
-        return (PathNormalization.NormalizeFilePath(activeDocument.FullName), activeDocument.ProjectItem?.ContainingProject?.UniqueName ?? string.Empty);
+        return (
+            PathNormalization.NormalizeFilePath(activeDocument.FullName),
+            activeDocument.ProjectItem?.ContainingProject?.UniqueName ?? string.Empty);
+    }
+
+    private static IEnumerable<CodeModelHit> SearchCodeModelSymbols(
+        DTE2 dte,
+        string query,
+        string kind,
+        string scope,
+        bool matchCase,
+        string? projectUniqueName,
+        string? pathFilter)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var comparison = matchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        var activeDocument = TryGetActiveDocumentTarget(dte);
+        var files = scope switch
+        {
+            "document" => string.IsNullOrWhiteSpace(activeDocument.Path)
+                ? Array.Empty<(string Path, string ProjectUniqueName)>()
+                : new[] { activeDocument },
+            "open" => EnumerateOpenFiles(dte),
+            "project" => EnumerateSolutionFiles(dte)
+                .Where(item => string.Equals(item.ProjectUniqueName, projectUniqueName, StringComparison.OrdinalIgnoreCase)),
+            _ => EnumerateSolutionFiles(dte),
+        };
+
+        if (!string.IsNullOrWhiteSpace(pathFilter))
+        {
+            files = files.Where(item => item.Path.IndexOf(pathFilter, StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var hits = new List<CodeModelHit>();
+        foreach (var file in files)
+        {
+            if (string.IsNullOrWhiteSpace(file.Path))
+            {
+                continue;
+            }
+
+            ProjectItem? projectItem = null;
+            CodeElements? elements = null;
+            try
+            {
+                projectItem = dte.Solution.FindProjectItem(file.Path);
+                elements = projectItem?.FileCodeModel?.CodeElements;
+            }
+            catch
+            {
+            }
+
+            if (projectItem is null || elements is null)
+            {
+                continue;
+            }
+
+            foreach (CodeElement element in elements)
+            {
+                CollectMatchingSymbols(element, file.Path, file.ProjectUniqueName, query, kind, comparison, hits, seen);
+            }
+        }
+
+        return hits
+            .OrderByDescending(hit => hit.Score)
+            .ThenBy(hit => hit.Path, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(hit => hit.Line)
+            .ThenBy(hit => hit.Name, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static void CollectMatchingSymbols(
+        CodeElement element,
+        string path,
+        string projectUniqueName,
+        string query,
+        string kindFilter,
+        StringComparison comparison,
+        List<CodeModelHit> hits,
+        HashSet<string> seen)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        vsCMElement kind;
+        try
+        {
+            kind = element.Kind;
+        }
+        catch
+        {
+            return;
+        }
+
+        if (s_codeModelKinds.Contains(kind))
+        {
+            var normalizedKind = NormalizeKind(kind);
+            if (MatchesKind(kindFilter, normalizedKind))
+            {
+                var name = TryGetElementName(element);
+                var fullName = TryGetFullName(element);
+                var score = ScoreSymbolMatch(query, name, fullName, comparison, out var matchKind);
+                if (score > 0)
+                {
+                    var line = TryGetLine(element.StartPoint);
+                    var endLine = TryGetLine(element.EndPoint);
+                    var signature = TryGetSignature(element, fullName, name);
+                    var key = string.Concat(path, "|", normalizedKind, "|", fullName, "|", line.ToString());
+                    if (seen.Add(key))
+                    {
+                        hits.Add(new CodeModelHit
+                        {
+                            Path = path,
+                            ProjectUniqueName = projectUniqueName,
+                            Name = name,
+                            FullName = fullName,
+                            Kind = normalizedKind,
+                            Signature = signature,
+                            Line = line,
+                            EndLine = endLine,
+                            Score = score,
+                            MatchKind = matchKind,
+                        });
+                    }
+                }
+            }
+        }
+
+        foreach (var child in EnumerateChildren(element))
+        {
+            CollectMatchingSymbols(child, path, projectUniqueName, query, kindFilter, comparison, hits, seen);
+        }
+    }
+
+    private static IEnumerable<CodeElement> EnumerateChildren(CodeElement element)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        CodeElements? children = null;
+        try
+        {
+            children = element switch
+            {
+                CodeNamespace codeNamespace => codeNamespace.Members,
+                CodeClass codeClass => codeClass.Members,
+                CodeStruct codeStruct => codeStruct.Members,
+                CodeInterface codeInterface => codeInterface.Members,
+                _ => null,
+            };
+        }
+        catch
+        {
+        }
+
+        if (children is null)
+        {
+            yield break;
+        }
+
+        foreach (CodeElement child in children)
+        {
+            yield return child;
+        }
+    }
+
+    private static string NormalizeKind(vsCMElement kind)
+    {
+        return kind switch
+        {
+            vsCMElement.vsCMElementFunction => "function",
+            vsCMElement.vsCMElementClass => "class",
+            vsCMElement.vsCMElementStruct => "struct",
+            vsCMElement.vsCMElementEnum => "enum",
+            vsCMElement.vsCMElementNamespace => "namespace",
+            vsCMElement.vsCMElementInterface => "interface",
+            vsCMElement.vsCMElementProperty => "member",
+            vsCMElement.vsCMElementVariable => "member",
+            _ => "unknown",
+        };
+    }
+
+    private static bool MatchesKind(string kindFilter, string normalizedKind)
+    {
+        return kindFilter.ToLowerInvariant() switch
+        {
+            "all" => true,
+            "type" => normalizedKind is "class" or "struct" or "enum" or "interface",
+            "member" => normalizedKind is "member" or "function",
+            _ => string.Equals(kindFilter, normalizedKind, StringComparison.OrdinalIgnoreCase),
+        };
+    }
+
+    private static string TryGetElementName(CodeElement element)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        try
+        {
+            return element.Name ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static string TryGetFullName(CodeElement element)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        try
+        {
+            return string.IsNullOrWhiteSpace(element.FullName) ? TryGetElementName(element) : element.FullName;
+        }
+        catch
+        {
+            return TryGetElementName(element);
+        }
+    }
+
+    private static string TryGetSignature(CodeElement element, string fullName, string name)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        try
+        {
+            if (element is CodeFunction function)
+            {
+                return function.get_Prototype(
+                    (int)(vsCMPrototype.vsCMPrototypeFullname | vsCMPrototype.vsCMPrototypeParamTypes | vsCMPrototype.vsCMPrototypeType))
+                    ?? fullName;
+            }
+        }
+        catch
+        {
+        }
+
+        return string.IsNullOrWhiteSpace(fullName) ? name : fullName;
+    }
+
+    private static int TryGetLine(TextPoint? point)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        try
+        {
+            return point?.Line ?? 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    private static int ScoreSymbolMatch(
+        string query,
+        string name,
+        string fullName,
+        StringComparison comparison,
+        out string matchKind)
+    {
+        matchKind = string.Empty;
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return 0;
+        }
+
+        if (string.Equals(name, query, comparison))
+        {
+            matchKind = "name-exact";
+            return 1000;
+        }
+
+        if (string.Equals(fullName, query, comparison))
+        {
+            matchKind = "full-name-exact";
+            return 950;
+        }
+
+        if (name.StartsWith(query, comparison))
+        {
+            matchKind = "name-prefix";
+            return 875;
+        }
+
+        if (fullName.StartsWith(query, comparison))
+        {
+            matchKind = "full-name-prefix";
+            return 850;
+        }
+
+        if (name.IndexOf(query, comparison) >= 0)
+        {
+            matchKind = "name-contains";
+            return 760;
+        }
+
+        if (fullName.IndexOf(query, comparison) >= 0)
+        {
+            matchKind = "full-name-contains";
+            return 720;
+        }
+
+        return 0;
     }
 
     private static IEnumerable<(string Path, string ProjectUniqueName)> EnumerateSolutionFiles(DTE2 dte)
@@ -745,5 +1151,72 @@ internal sealed class SearchService
                 yield return file;
             }
         }
+    }
+
+    private static IEnumerable<(string Path, string ProjectUniqueName)> EnumerateOpenFiles(DTE2 dte)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        foreach (Document document in dte.Documents)
+        {
+            string? fullName = null;
+            try
+            {
+                fullName = document.FullName;
+            }
+            catch
+            {
+            }
+
+            if (string.IsNullOrWhiteSpace(fullName))
+            {
+                continue;
+            }
+
+            var normalizedPath = PathNormalization.NormalizeFilePath(fullName!);
+            yield return (normalizedPath, document.ProjectItem?.ContainingProject?.UniqueName ?? string.Empty);
+        }
+    }
+
+    private static (string Path, string ProjectUniqueName) TryGetActiveDocumentTarget(DTE2 dte)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var activeDocument = dte.ActiveDocument;
+        if (activeDocument is null || string.IsNullOrWhiteSpace(activeDocument.FullName))
+        {
+            return (string.Empty, string.Empty);
+        }
+
+        return (PathNormalization.NormalizeFilePath(activeDocument.FullName), activeDocument.ProjectItem?.ContainingProject?.UniqueName ?? string.Empty);
+    }
+
+    private static string[] ReadSearchLines(DTE2 dte, string path)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var normalizedPath = PathNormalization.NormalizeFilePath(path);
+        foreach (Document document in dte.Documents)
+        {
+            try
+            {
+                if (!string.Equals(PathNormalization.NormalizeFilePath(document.FullName), normalizedPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (document.Object("TextDocument") is TextDocument textDocument)
+                {
+                    var editPoint = textDocument.StartPoint.CreateEditPoint();
+                    var text = editPoint.GetText(textDocument.EndPoint);
+                    return text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        return File.ReadAllLines(normalizedPath);
     }
 }

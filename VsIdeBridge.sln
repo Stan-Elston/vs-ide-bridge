@@ -4,6 +4,8 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "VsIdeBridge", "src\VsIdeBridge\VsIdeBridge.csproj", "{96A2B4F0-6FB5-44F0-852A-CE485ECDB91D}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "VsIdeBridgeCli", "src\VsIdeBridgeCli\VsIdeBridgeCli.csproj", "{D2C6D411-4C5B-4D4A-93D9-8E2A3D528AB9}"
+EndProject
 Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "IdeBridgeJsonProbe", "src\IdeBridgeJsonProbe\IdeBridgeJsonProbe.vcxproj", "{E43C296A-6DFD-44F5-9361-71B3915EAD5E}"
 EndProject
 Global
@@ -16,6 +18,10 @@ Global
 		{96A2B4F0-6FB5-44F0-852A-CE485ECDB91D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{96A2B4F0-6FB5-44F0-852A-CE485ECDB91D}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{96A2B4F0-6FB5-44F0-852A-CE485ECDB91D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D2C6D411-4C5B-4D4A-93D9-8E2A3D528AB9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D2C6D411-4C5B-4D4A-93D9-8E2A3D528AB9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D2C6D411-4C5B-4D4A-93D9-8E2A3D528AB9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D2C6D411-4C5B-4D4A-93D9-8E2A3D528AB9}.Release|Any CPU.Build.0 = Release|Any CPU
 		{E43C296A-6DFD-44F5-9361-71B3915EAD5E}.Debug|Any CPU.ActiveCfg = Debug|x64
 		{E43C296A-6DFD-44F5-9361-71B3915EAD5E}.Debug|Any CPU.Build.0 = Debug|x64
 		{E43C296A-6DFD-44F5-9361-71B3915EAD5E}.Release|Any CPU.ActiveCfg = Release|x64

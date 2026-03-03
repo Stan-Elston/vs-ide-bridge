@@ -49,9 +49,12 @@ internal sealed class PatchService
         string? patchFilePath,
         string? patchText,
         string? baseDirectory,
-        bool openChangedFiles)
+        bool openChangedFiles,
+        bool saveChangedFiles)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        var previousActiveDocument = CaptureActiveDocumentLocation(dte);
 
         if (string.IsNullOrWhiteSpace(patchFilePath) == string.IsNullOrWhiteSpace(patchText))
         {
@@ -83,7 +86,7 @@ internal sealed class PatchService
 
         var resolvedBaseDirectory = ResolveBaseDirectory(dte, baseDirectory);
         var appliedFiles = new JArray();
-        var filesToOpen = new List<(string Path, int Line)>();
+        var filesToFocus = new List<(string Path, int Line)>();
 
         foreach (var filePatch in filePatches)
         {
@@ -94,38 +97,50 @@ internal sealed class PatchService
 
             if (result.DeleteFile)
             {
+                CloseOpenDocumentIfPresent(dte, target.Path);
                 if (File.Exists(target.Path))
                 {
                     File.Delete(target.Path);
                 }
+
+                appliedFiles.Add(new JObject
+                {
+                    ["path"] = target.Path,
+                    ["status"] = "deleted",
+                    ["firstChangedLine"] = result.FirstChangedLine,
+                    ["hunkCount"] = filePatch.Hunks.Count,
+                });
             }
             else
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(target.Path)!);
-                File.WriteAllText(target.Path, result.Content);
-                filesToOpen.Add((target.Path, result.FirstChangedLine));
-            }
+                var writeResult = await documentService.WriteDocumentTextAsync(
+                    dte,
+                    target.Path,
+                    result.Content,
+                    result.FirstChangedLine,
+                    1,
+                    saveChangedFiles).ConfigureAwait(true);
+                filesToFocus.Add((target.Path, result.FirstChangedLine));
 
-            appliedFiles.Add(new JObject
-            {
-                ["path"] = target.Path,
-                ["status"] = result.DeleteFile ? "deleted" : (target.IsNewFile ? "added" : "modified"),
-                ["firstChangedLine"] = result.FirstChangedLine,
-                ["hunkCount"] = filePatch.Hunks.Count,
-            });
+                appliedFiles.Add(new JObject
+                {
+                    ["path"] = target.Path,
+                    ["status"] = target.IsNewFile ? "added" : "modified",
+                    ["firstChangedLine"] = result.FirstChangedLine,
+                    ["hunkCount"] = filePatch.Hunks.Count,
+                    ["editorBacked"] = writeResult["editorBacked"] ?? false,
+                    ["saved"] = writeResult["saved"] ?? saveChangedFiles,
+                });
+            }
         }
 
-        if (openChangedFiles)
+        if (openChangedFiles && filesToFocus.Count > 0)
         {
-            foreach (var file in filesToOpen.Skip(1))
-            {
-                await documentService.OpenDocumentAsync(dte, file.Path, file.Line, 1).ConfigureAwait(true);
-            }
-
-            if (filesToOpen.Count > 0)
-            {
-                await documentService.OpenDocumentAsync(dte, filesToOpen[0].Path, filesToOpen[0].Line, 1).ConfigureAwait(true);
-            }
+            await documentService.OpenDocumentAsync(dte, filesToFocus[0].Path, filesToFocus[0].Line, 1).ConfigureAwait(true);
+        }
+        else
+        {
+            await RestoreActiveDocumentAsync(dte, documentService, previousActiveDocument).ConfigureAwait(true);
         }
 
         return new JObject
@@ -134,11 +149,33 @@ internal sealed class PatchService
             ["baseDirectory"] = resolvedBaseDirectory,
             ["count"] = appliedFiles.Count,
             ["openChangedFiles"] = openChangedFiles,
+            ["saveChangedFiles"] = saveChangedFiles,
+            ["visibleEdits"] = true,
             ["items"] = appliedFiles,
         };
     }
 
     private static void EnsureSafeToModifyOpenDocument(DTE2 dte, string path)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var normalizedPath = PathNormalization.NormalizeFilePath(path);
+        var openDocument = dte.Documents.Cast<Document>().FirstOrDefault(document =>
+            !string.IsNullOrWhiteSpace(document.FullName) &&
+            PathNormalization.AreEquivalent(document.FullName, normalizedPath));
+
+        if (openDocument is null)
+        {
+            return;
+        }
+
+        if (!openDocument.Saved)
+        {
+            throw new CommandErrorException("unsupported_operation", $"Open document has unsaved changes: {normalizedPath}");
+        }
+    }
+
+    private static void CloseOpenDocumentIfPresent(DTE2 dte, string path)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
@@ -229,6 +266,57 @@ internal sealed class PatchService
         }
 
         return PathNormalization.NormalizeFilePath(Environment.CurrentDirectory);
+    }
+
+    private static (string Path, int Line, int Column)? CaptureActiveDocumentLocation(DTE2 dte)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var activeDocument = dte.ActiveDocument;
+        if (activeDocument is null || string.IsNullOrWhiteSpace(activeDocument.FullName))
+        {
+            return null;
+        }
+
+        var line = 1;
+        var column = 1;
+        try
+        {
+            if (activeDocument.Object("TextDocument") is TextDocument textDocument)
+            {
+                line = Math.Max(1, textDocument.Selection.ActivePoint.Line);
+                column = Math.Max(1, textDocument.Selection.ActivePoint.DisplayColumn);
+            }
+        }
+        catch
+        {
+        }
+
+        return (PathNormalization.NormalizeFilePath(activeDocument.FullName), line, column);
+    }
+
+    private static async Task RestoreActiveDocumentAsync(
+        DTE2 dte,
+        DocumentService documentService,
+        (string Path, int Line, int Column)? previousActiveDocument)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        if (previousActiveDocument is null || string.IsNullOrWhiteSpace(previousActiveDocument.Value.Path))
+        {
+            return;
+        }
+
+        if (!File.Exists(previousActiveDocument.Value.Path))
+        {
+            return;
+        }
+
+        await documentService.OpenDocumentAsync(
+            dte,
+            previousActiveDocument.Value.Path,
+            previousActiveDocument.Value.Line,
+            previousActiveDocument.Value.Column).ConfigureAwait(true);
     }
 
     private static (string Content, int FirstChangedLine, bool DeleteFile) ApplyFilePatch(string path, FilePatch patch)

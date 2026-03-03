@@ -33,13 +33,22 @@
           <LocCanonicalName>.Tools.VsIdeBridgeHelpMenu</LocCanonicalName>
         </Strings>
       </Button>
-      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeSmokeTestMenu" priority="0x0110" type="Button">
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeToggleAllowBridgeEditsMenu" priority="0x0110" type="Button">
         <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
         <Strings>
-          <ButtonText>Smoke Test</ButtonText>
-          <CommandName>IdeSmokeTestMenu</CommandName>
-          <CanonicalName>Tools.VsIdeBridgeSmokeTestMenu</CanonicalName>
-          <LocCanonicalName>.Tools.VsIdeBridgeSmokeTestMenu</LocCanonicalName>
+          <ButtonText>Allow Bridge Edits</ButtonText>
+          <CommandName>IdeToggleAllowBridgeEditsMenu</CommandName>
+          <CanonicalName>Tools.VsIdeBridgeToggleAllowBridgeEdits</CanonicalName>
+          <LocCanonicalName>.Tools.VsIdeBridgeToggleAllowBridgeEdits</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeToggleGoToEditedPartsMenu" priority="0x0120" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <Strings>
+          <ButtonText>Go To Edited Parts</ButtonText>
+          <CommandName>IdeToggleGoToEditedPartsMenu</CommandName>
+          <CanonicalName>Tools.VsIdeBridgeToggleGoToEditedParts</CanonicalName>
+          <LocCanonicalName>.Tools.VsIdeBridgeToggleGoToEditedParts</LocCanonicalName>
         </Strings>
       </Button>
       <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeHelp" priority="0x01F0" type="Button">
@@ -285,6 +294,17 @@
           <LocCanonicalName>.Tools.IdeGoToDefinition</LocCanonicalName>
         </Strings>
       </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeGoToImplementation" priority="0x022F" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Go To Implementation</ButtonText>
+          <CommandName>IdeGoToImplementation</CommandName>
+          <CanonicalName>Tools.IdeGoToImplementation</CanonicalName>
+          <LocCanonicalName>.Tools.IdeGoToImplementation</LocCanonicalName>
+        </Strings>
+      </Button>
       <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeGetFileOutline" priority="0x0223" type="Button">
         <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
         <CommandFlag>CommandWellOnly</CommandFlag>
@@ -450,6 +470,17 @@
           <LocCanonicalName>.Tools.IdeGetErrorList</LocCanonicalName>
         </Strings>
       </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeGetWarnings" priority="0x0230" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Get Warnings</ButtonText>
+          <CommandName>IdeGetWarnings</CommandName>
+          <CanonicalName>Tools.IdeGetWarnings</CanonicalName>
+          <LocCanonicalName>.Tools.IdeGetWarnings</LocCanonicalName>
+        </Strings>
+      </Button>
       <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeBuildAndCaptureErrors" priority="0x0214" type="Button">
         <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
         <CommandFlag>CommandWellOnly</CommandFlag>
@@ -516,6 +547,17 @@
           <LocCanonicalName>.Tools.IdeGetDocumentSlices</LocCanonicalName>
         </Strings>
       </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeGetFileSymbols" priority="0x022D" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Get File Symbols</ButtonText>
+          <CommandName>IdeGetFileSymbols</CommandName>
+          <CanonicalName>Tools.IdeGetFileSymbols</CanonicalName>
+          <LocCanonicalName>.Tools.IdeGetFileSymbols</LocCanonicalName>
+        </Strings>
+      </Button>
       <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeEnableBreakpoint" priority="0x0229" type="Button">
         <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
         <CommandFlag>CommandWellOnly</CommandFlag>
@@ -574,7 +616,8 @@
       <IDSymbol name="cmdidIdeHelp" value="0x0100" />
       <IDSymbol name="cmdidIdeSmokeTest" value="0x0101" />
       <IDSymbol name="cmdidIdeHelpMenu" value="0x0102" />
-      <IDSymbol name="cmdidIdeSmokeTestMenu" value="0x0103" />
+      <IDSymbol name="cmdidIdeToggleAllowBridgeEditsMenu" value="0x0103" />
+      <IDSymbol name="cmdidIdeToggleGoToEditedPartsMenu" value="0x0104" />
       <IDSymbol name="cmdidIdeGetState" value="0x0200" />
       <IDSymbol name="cmdidIdeWaitForReady" value="0x0201" />
       <IDSymbol name="cmdidIdeFindText" value="0x0202" />
@@ -595,6 +638,7 @@
       <IDSymbol name="cmdidIdeGetSmartContextForQuery" value="0x0220" />
       <IDSymbol name="cmdidIdeApplyUnifiedDiff" value="0x0221" />
       <IDSymbol name="cmdidIdeGoToDefinition" value="0x0222" />
+      <IDSymbol name="cmdidIdeGoToImplementation" value="0x022F" />
       <IDSymbol name="cmdidIdeGetFileOutline" value="0x0223" />
       <IDSymbol name="cmdidIdeSetBreakpoint" value="0x0206" />
       <IDSymbol name="cmdidIdeListBreakpoints" value="0x0207" />
@@ -610,12 +654,14 @@
       <IDSymbol name="cmdidIdeDebugStepOut" value="0x0211" />
       <IDSymbol name="cmdidIdeBuildSolution" value="0x0212" />
       <IDSymbol name="cmdidIdeGetErrorList" value="0x0213" />
+      <IDSymbol name="cmdidIdeGetWarnings" value="0x0230" />
       <IDSymbol name="cmdidIdeBuildAndCaptureErrors" value="0x0214" />
       <IDSymbol name="cmdidIdeOpenSolution" value="0x0224" />
       <IDSymbol name="cmdidIdeBatchCommands" value="0x0225" />
       <IDSymbol name="cmdidIdeSearchSymbols" value="0x0226" />
       <IDSymbol name="cmdidIdeGetQuickInfo" value="0x0227" />
       <IDSymbol name="cmdidIdeGetDocumentSlices" value="0x0228" />
+      <IDSymbol name="cmdidIdeGetFileSymbols" value="0x022D" />
       <IDSymbol name="cmdidIdeEnableBreakpoint" value="0x0229" />
       <IDSymbol name="cmdidIdeDisableBreakpoint" value="0x022A" />
       <IDSymbol name="cmdidIdeEnableAllBreakpoints" value="0x022B" />

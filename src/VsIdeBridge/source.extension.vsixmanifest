@@ -4,7 +4,7 @@
     <Identity Id="StanElston.VsIdeBridge" Version="0.1.0" Language="en-US" Publisher="Stan Elston" />
     <DisplayName>VS IDE Bridge</DisplayName>
     <Description xml:space="preserve">Expose stable scriptable Visual Studio IDE commands for state, search, breakpoints, debugging, build, and Error List capture.</Description>
-    <MoreInfo>https://github.com/Stan-Elston/vs-ide-bridge</MoreInfo>
+    <MoreInfo>https://github.com/RenegadeRiff86/vs-ide-bridge</MoreInfo>
   </Metadata>
 
   <Installation>

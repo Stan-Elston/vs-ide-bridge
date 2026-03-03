@@ -17,7 +17,8 @@ internal static class CommandRegistrar
         Assumes.Present(commandService);
 
         runtime.RegisterCommand(new IdeCoreCommands.IdeHelpMenuCommand(package, runtime, commandService));
-        runtime.RegisterCommand(new IdeCoreCommands.IdeSmokeTestMenuCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new IdeCoreCommands.IdeToggleAllowBridgeEditsMenuCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new IdeCoreCommands.IdeToggleGoToEditedPartsMenuCommand(package, runtime, commandService));
         runtime.RegisterCommand(new IdeCoreCommands.IdeHelpCommand(package, runtime, commandService));
         runtime.RegisterCommand(new IdeCoreCommands.IdeSmokeTestCommand(package, runtime, commandService));
         runtime.RegisterCommand(new IdeCoreCommands.IdeGetStateCommand(package, runtime, commandService));
@@ -41,10 +42,12 @@ internal static class CommandRegistrar
         runtime.RegisterCommand(new SearchNavigationCommands.IdeGetDocumentSliceCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SearchNavigationCommands.IdeGetSmartContextForQueryCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SearchNavigationCommands.IdeGoToDefinitionCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new SearchNavigationCommands.IdeGoToImplementationCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SearchNavigationCommands.IdeGetFileOutlineCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SearchNavigationCommands.IdeSearchSymbolsCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SearchNavigationCommands.IdeGetQuickInfoCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SearchNavigationCommands.IdeGetDocumentSlicesCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new SearchNavigationCommands.IdeGetFileSymbolsCommand(package, runtime, commandService));
         runtime.RegisterCommand(new PatchCommands.IdeApplyUnifiedDiffCommand(package, runtime, commandService));
 
         runtime.RegisterCommand(new BreakpointCommands.IdeSetBreakpointCommand(package, runtime, commandService));
@@ -66,6 +69,7 @@ internal static class CommandRegistrar
         runtime.RegisterCommand(new DebugBuildCommands.IdeDebugStepOutCommand(package, runtime, commandService));
         runtime.RegisterCommand(new DebugBuildCommands.IdeBuildSolutionCommand(package, runtime, commandService));
         runtime.RegisterCommand(new DebugBuildCommands.IdeGetErrorListCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new DebugBuildCommands.IdeGetWarningsCommand(package, runtime, commandService));
         runtime.RegisterCommand(new DebugBuildCommands.IdeBuildAndCaptureErrorsCommand(package, runtime, commandService));
         runtime.RegisterCommand(new IdeCoreCommands.IdeBatchCommandsCommand(package, runtime, commandService));
     }

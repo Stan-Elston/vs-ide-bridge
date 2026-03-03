@@ -12,6 +12,37 @@ using VsIdeBridge.Infrastructure;
 
 namespace VsIdeBridge.Services;
 
+internal sealed class ErrorListQuery
+{
+    public string? Severity { get; set; }
+
+    public string? Code { get; set; }
+
+    public string? Project { get; set; }
+
+    public string? Path { get; set; }
+
+    public string? Text { get; set; }
+
+    public string? GroupBy { get; set; }
+
+    public int? Max { get; set; }
+
+    public JObject ToJson()
+    {
+        return new JObject
+        {
+            ["severity"] = Severity ?? string.Empty,
+            ["code"] = Code ?? string.Empty,
+            ["project"] = Project ?? string.Empty,
+            ["path"] = Path ?? string.Empty,
+            ["text"] = Text ?? string.Empty,
+            ["groupBy"] = GroupBy ?? string.Empty,
+            ["max"] = Max.HasValue ? Max.Value : JValue.CreateNull(),
+        };
+    }
+}
+
 internal sealed class ErrorListService
 {
     private const int StableSampleCount = 3;
@@ -28,7 +59,12 @@ internal sealed class ErrorListService
         _readinessService = readinessService;
     }
 
-    public async Task<JObject> GetErrorListAsync(IdeCommandContext context, bool waitForIntellisense, int timeoutMilliseconds, bool quickSnapshot = false)
+    public async Task<JObject> GetErrorListAsync(
+        IdeCommandContext context,
+        bool waitForIntellisense,
+        int timeoutMilliseconds,
+        bool quickSnapshot = false,
+        ErrorListQuery? query = null)
     {
         if (waitForIntellisense)
         {
@@ -39,6 +75,7 @@ internal sealed class ErrorListService
         if (quickSnapshot)
         {
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
+            EnsureErrorListWindow(context.Dte);
             try
             {
                 rows = ReadRows(context.Dte);
@@ -52,30 +89,47 @@ internal sealed class ErrorListService
         {
             rows = await WaitForRowsAsync(context, timeoutMilliseconds).ConfigureAwait(true);
         }
-        var severityCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Error"] = 0,
-            ["Warning"] = 0,
-            ["Message"] = 0,
-        };
-        foreach (var row in rows)
+        var filteredRows = ApplyQuery(rows, query).ToArray();
+        var severityCounts = CreateSeverityCounts();
+        foreach (var row in filteredRows)
         {
             severityCounts[(string)row["severity"]!] += 1;
         }
 
+        var totalSeverityCounts = CreateSeverityCounts();
+        foreach (var row in rows)
+        {
+            totalSeverityCounts[(string)row["severity"]!] += 1;
+        }
+
         return new JObject
         {
-            ["count"] = rows.Count,
+            ["count"] = filteredRows.Length,
+            ["totalCount"] = rows.Count,
             ["severityCounts"] = JObject.FromObject(severityCounts),
+            ["totalSeverityCounts"] = JObject.FromObject(totalSeverityCounts),
             ["hasErrors"] = severityCounts["Error"] > 0,
             ["hasWarnings"] = severityCounts["Warning"] > 0,
-            ["rows"] = new JArray(rows),
+            ["filter"] = query?.ToJson() ?? new JObject(),
+            ["rows"] = new JArray(filteredRows),
+            ["groups"] = BuildGroups(filteredRows, query?.GroupBy),
+        };
+    }
+
+    private static Dictionary<string, int> CreateSeverityCounts()
+    {
+        return new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Error"] = 0,
+            ["Warning"] = 0,
+            ["Message"] = 0,
         };
     }
 
     private async Task<IReadOnlyList<JObject>> WaitForRowsAsync(IdeCommandContext context, int timeoutMilliseconds)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
+        EnsureErrorListWindow(context.Dte);
 
         var timeout = timeoutMilliseconds > 0 ? timeoutMilliseconds : 90000;
         var deadline = DateTimeOffset.UtcNow.AddMilliseconds(timeout);
@@ -94,6 +148,7 @@ internal sealed class ErrorListService
             }
             catch (InvalidOperationException)
             {
+                EnsureErrorListWindow(context.Dte);
             }
 
             if (rows is not null)
@@ -109,7 +164,9 @@ internal sealed class ErrorListService
                 }
 
                 lastRows = rows.ToArray();
-                if (rows.Count > 0 && stableSamples >= StableSampleCount)
+                // A clean solution should return promptly once the Error List is stable,
+                // instead of waiting out the full timeout for a non-zero row count.
+                if (stableSamples >= StableSampleCount)
                 {
                     return rows;
                 }
@@ -129,9 +186,7 @@ internal sealed class ErrorListService
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
-        var window = dte.Windows
-            .Cast<Window>()
-            .FirstOrDefault(candidate => string.Equals(candidate.Caption, "Error List", StringComparison.OrdinalIgnoreCase));
+        var window = TryGetErrorListWindow(dte);
         if (window?.Object is not ErrorList errorList)
         {
             throw new InvalidOperationException("Error List window is not available.");
@@ -143,19 +198,51 @@ internal sealed class ErrorListService
         {
             var item = items.Item(i);
             var severity = MapSeverity(item.ErrorLevel);
+            var description = item.Description ?? string.Empty;
+            var code = InferCode(description, item.Project ?? string.Empty, item.FileName ?? string.Empty, item.Line);
             rows.Add(new JObject
             {
                 ["severity"] = severity,
-                ["code"] = InferCode(item.Description ?? string.Empty, item.Project ?? string.Empty, item.FileName ?? string.Empty, item.Line),
-                ["message"] = item.Description ?? string.Empty,
+                ["code"] = code,
+                ["codeFamily"] = InferCodeFamily(code),
+                ["tool"] = InferTool(code, description),
+                ["message"] = description,
                 ["project"] = item.Project ?? string.Empty,
                 ["file"] = item.FileName ?? string.Empty,
                 ["line"] = item.Line,
                 ["column"] = item.Column,
+                ["symbols"] = new JArray(ExtractSymbols(description)),
             });
         }
 
         return rows;
+    }
+
+    private static void EnsureErrorListWindow(DTE2 dte)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (TryGetErrorListWindow(dte)?.Object is ErrorList)
+        {
+            return;
+        }
+
+        try
+        {
+            dte.ExecuteCommand("View.ErrorList", string.Empty);
+        }
+        catch
+        {
+        }
+    }
+
+    private static Window? TryGetErrorListWindow(DTE2 dte)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        return dte.Windows
+            .Cast<Window>()
+            .FirstOrDefault(candidate => string.Equals(candidate.Caption, "Error List", StringComparison.OrdinalIgnoreCase));
     }
 
     private static string MapSeverity(vsBuildErrorLevel level)
@@ -239,6 +326,196 @@ internal sealed class ErrorListService
         }
 
         return code.ToUpperInvariant();
+    }
+
+    private static string InferCodeFamily(string code)
+    {
+        if (string.IsNullOrWhiteSpace(code))
+        {
+            return string.Empty;
+        }
+
+        if (code.StartsWith("LNK", StringComparison.OrdinalIgnoreCase))
+        {
+            return "linker";
+        }
+
+        if (code.StartsWith("MSB", StringComparison.OrdinalIgnoreCase))
+        {
+            return "msbuild";
+        }
+
+        if (code.StartsWith("VCR", StringComparison.OrdinalIgnoreCase))
+        {
+            return "analyzer";
+        }
+
+        if (code.StartsWith("lnt-", StringComparison.OrdinalIgnoreCase))
+        {
+            return "linter";
+        }
+
+        if (code.StartsWith("C", StringComparison.OrdinalIgnoreCase) ||
+            code.StartsWith("E", StringComparison.OrdinalIgnoreCase))
+        {
+            return "compiler";
+        }
+
+        return "other";
+    }
+
+    private static string InferTool(string code, string description)
+    {
+        var family = InferCodeFamily(code);
+        if (!string.IsNullOrWhiteSpace(family))
+        {
+            return family;
+        }
+
+        if (description.IndexOf("IntelliSense", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return "intellisense";
+        }
+
+        return "diagnostic";
+    }
+
+    private static IReadOnlyList<string> ExtractSymbols(string description)
+    {
+        var symbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (Match match in Regex.Matches(description, "\"([^\"]+)\"|'([^']+)'"))
+        {
+            var value = match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value;
+            if (LooksLikeSymbol(value))
+            {
+                symbols.Add(value);
+            }
+        }
+
+        foreach (Match match in Regex.Matches(description, @"\b[A-Za-z_~][A-Za-z0-9_:<>~]*\b"))
+        {
+            var value = match.Value;
+            if (LooksLikeSymbol(value))
+            {
+                symbols.Add(value);
+            }
+        }
+
+        return symbols.Take(8).ToArray();
+    }
+
+    private static bool LooksLikeSymbol(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length < 2)
+        {
+            return false;
+        }
+
+        return value.Contains("::", StringComparison.Ordinal) ||
+            value.Contains("_", StringComparison.Ordinal) ||
+            char.IsUpper(value[0]) ||
+            value.StartsWith("C", StringComparison.OrdinalIgnoreCase) ||
+            value.StartsWith("E", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IReadOnlyList<JObject> ApplyQuery(IReadOnlyList<JObject> rows, ErrorListQuery? query)
+    {
+        if (query is null)
+        {
+            return rows;
+        }
+
+        IEnumerable<JObject> filtered = rows;
+
+        if (!string.IsNullOrWhiteSpace(query.Severity) &&
+            !string.Equals(query.Severity, "all", StringComparison.OrdinalIgnoreCase))
+        {
+            filtered = filtered.Where(row => string.Equals(
+                (string?)row["severity"],
+                NormalizeSeverity(query.Severity),
+                StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Code))
+        {
+            filtered = filtered.Where(row => ((string?)row["code"] ?? string.Empty)
+                .StartsWith(query.Code, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Project))
+        {
+            filtered = filtered.Where(row => ((string?)row["project"] ?? string.Empty)
+                .IndexOf(query.Project, StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Path))
+        {
+            filtered = filtered.Where(row => ((string?)row["file"] ?? string.Empty)
+                .IndexOf(query.Path, StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Text))
+        {
+            filtered = filtered.Where(row => ((string?)row["message"] ?? string.Empty)
+                .IndexOf(query.Text, StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        if (query.Max.HasValue && query.Max.Value > 0)
+        {
+            filtered = filtered.Take(query.Max.Value);
+        }
+
+        return filtered.ToArray();
+    }
+
+    private static string NormalizeSeverity(string? severity)
+    {
+        return severity?.ToLowerInvariant() switch
+        {
+            "error" => "Error",
+            "warning" => "Warning",
+            "message" => "Message",
+            _ => severity ?? string.Empty,
+        };
+    }
+
+    private static JArray BuildGroups(IReadOnlyList<JObject> rows, string? groupBy)
+    {
+        if (string.IsNullOrWhiteSpace(groupBy))
+        {
+            return new JArray();
+        }
+
+        var groupKey = groupBy!;
+        Func<JObject, string> keySelector = groupKey.ToLowerInvariant() switch
+        {
+            "code" => row => (string?)row["code"] ?? string.Empty,
+            "file" => row => (string?)row["file"] ?? string.Empty,
+            "project" => row => (string?)row["project"] ?? string.Empty,
+            "tool" => row => (string?)row["tool"] ?? string.Empty,
+            _ => row => string.Empty,
+        };
+
+        if (groupKey is not ("code" or "file" or "project" or "tool"))
+        {
+            return new JArray();
+        }
+
+        return new JArray(rows
+            .GroupBy(keySelector, StringComparer.OrdinalIgnoreCase)
+            .Where(group => !string.IsNullOrWhiteSpace(group.Key))
+            .OrderByDescending(group => group.Count())
+            .ThenBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new JObject
+            {
+                ["key"] = group.Key,
+                ["groupBy"] = groupKey,
+                ["count"] = group.Count(),
+                ["sampleMessage"] = (string?)group.First()["message"] ?? string.Empty,
+                ["sampleFile"] = (string?)group.First()["file"] ?? string.Empty,
+                ["sampleCode"] = (string?)group.First()["code"] ?? string.Empty,
+            }));
     }
 
     private static bool IsLinkerContext(string project, string fileName, int line)
