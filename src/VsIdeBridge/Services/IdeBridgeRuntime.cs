@@ -80,6 +80,11 @@ internal sealed class IdeBridgeRuntime
 
     internal void RegisterCommand(IdeCommandBase cmd)
     {
+        if (!cmd.AllowAutomationInvocation)
+        {
+            return;
+        }
+
         _dispatcher[cmd.Name] = cmd;
         foreach (var alias in PipeCommandNames.GetAliases(cmd.Name))
         {

@@ -71,6 +71,7 @@ internal static class CommandRegistrar
         runtime.RegisterCommand(new DebugBuildCommands.IdeGetErrorListCommand(package, runtime, commandService));
         runtime.RegisterCommand(new DebugBuildCommands.IdeGetWarningsCommand(package, runtime, commandService));
         runtime.RegisterCommand(new DebugBuildCommands.IdeBuildAndCaptureErrorsCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new IdeCoreCommands.IdeCloseIdeCommand(package, runtime, commandService));
         runtime.RegisterCommand(new IdeCoreCommands.IdeBatchCommandsCommand(package, runtime, commandService));
     }
 }

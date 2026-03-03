@@ -407,6 +407,8 @@ internal static class IdeCoreCommands
 
         protected override string CanonicalName => "Tools.VsIdeBridgeHelpMenu";
 
+        internal override bool AllowAutomationInvocation => false;
+
         protected override Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
             return ShowHelpMenuAsync(context);
@@ -423,6 +425,8 @@ internal static class IdeCoreCommands
 
         protected override string CanonicalName => "Tools.VsIdeBridgeToggleAllowBridgeEdits";
 
+        internal override bool AllowAutomationInvocation => false;
+
         protected override Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
             return ToggleAllowBridgeEditsAsync(context);
@@ -438,6 +442,8 @@ internal static class IdeCoreCommands
         }
 
         protected override string CanonicalName => "Tools.VsIdeBridgeToggleGoToEditedParts";
+
+        internal override bool AllowAutomationInvocation => false;
 
         protected override Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
@@ -531,6 +537,31 @@ internal static class IdeCoreCommands
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             context.Dte.Solution.Open(solutionPath);
             return new CommandExecutionResult("Solution opened.", new JObject { ["solutionPath"] = solutionPath });
+        }
+    }
+
+    internal sealed class IdeCloseIdeCommand : IdeCommandBase
+    {
+        public IdeCloseIdeCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+            : base(package, runtime, commandService, 0x0231)
+        {
+        }
+
+        protected override string CanonicalName => "Tools.IdeCloseIde";
+
+        protected override Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            // Schedule quit after the response is written to the pipe
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(300).ConfigureAwait(false);
+                await context.Package.JoinableTaskFactory.SwitchToMainThreadAsync();
+                context.Dte.Quit();
+            });
+
+            return Task.FromResult(new CommandExecutionResult(
+                "Closing IDE.",
+                new JObject { ["closing"] = true }));
         }
     }
 

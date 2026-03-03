@@ -40,6 +40,7 @@ internal sealed class PipeServerService : IDisposable
 
     public void Start()
     {
+        PurgeStaleDiscoveryFiles();
         WriteDiscoveryFile(string.Empty);
         _ = _package.JoinableTaskFactory.RunAsync(async delegate
         {
@@ -58,6 +59,31 @@ internal sealed class PipeServerService : IDisposable
             }
         });
         _listenTask = Task.Run(() => ListenLoopAsync(_cts.Token));
+    }
+
+    private void PurgeStaleDiscoveryFiles()
+    {
+        var discoveryDir = Path.GetDirectoryName(_discoveryFile)!;
+        try
+        {
+            foreach (var file in Directory.GetFiles(discoveryDir, "bridge-*.json"))
+            {
+                if (string.Equals(file, _discoveryFile, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var stem = Path.GetFileNameWithoutExtension(file); // "bridge-12345"
+                var dash = stem.LastIndexOf('-');
+                if (dash >= 0 && int.TryParse(stem.Substring(dash + 1), out var pid))
+                {
+                    try { Process.GetProcessById(pid); }
+                    catch (ArgumentException) { File.Delete(file); } // process gone
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            ActivityLog.LogWarning(nameof(PipeServerService), $"Failed to purge stale discovery files: {ex.Message}");
+        }
     }
 
     private void WriteDiscoveryFile(string? solutionPath)

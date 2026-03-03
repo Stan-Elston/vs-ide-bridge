@@ -13,6 +13,7 @@ internal static class PipeCommandNames
         ["Tools.IdeGetState"] = new[] { "state" },
         ["Tools.IdeWaitForReady"] = new[] { "ready" },
         ["Tools.IdeOpenSolution"] = new[] { "open-solution" },
+        ["Tools.IdeCloseIde"] = new[] { "close-ide" },
         ["Tools.IdeBatchCommands"] = new[] { "batch" },
         ["Tools.IdeFindText"] = new[] { "find-text" },
         ["Tools.IdeFindFiles"] = new[] { "find-files" },

@@ -602,6 +602,16 @@
           <LocCanonicalName>.Tools.IdeDisableAllBreakpoints</LocCanonicalName>
         </Strings>
       </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeCloseIde" priority="0x0231" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Close IDE</ButtonText>
+          <CommandName>IdeCloseIde</CommandName>
+          <CanonicalName>Tools.IdeCloseIde</CanonicalName>
+          <LocCanonicalName>.Tools.IdeCloseIde</LocCanonicalName>
+        </Strings>
+      </Button>
     </Buttons>
   </Commands>
 
@@ -666,6 +676,7 @@
       <IDSymbol name="cmdidIdeDisableBreakpoint" value="0x022A" />
       <IDSymbol name="cmdidIdeEnableAllBreakpoints" value="0x022B" />
       <IDSymbol name="cmdidIdeDisableAllBreakpoints" value="0x022C" />
+      <IDSymbol name="cmdidIdeCloseIde" value="0x0231" />
     </GuidSymbol>
   </Symbols>
 </CommandTable>

@@ -14,6 +14,13 @@ namespace VsIdeBridge.Services;
 
 internal sealed class PatchService
 {
+    private sealed class ChangedRange
+    {
+        public int StartLine { get; set; }
+
+        public int EndLine { get; set; }
+    }
+
     private sealed class FilePatch
     {
         public string OldPath { get; set; } = string.Empty;
@@ -41,6 +48,17 @@ internal sealed class PatchService
         public char Kind { get; set; }
 
         public string Text { get; set; } = string.Empty;
+    }
+
+    private sealed class ApplyFilePatchResult
+    {
+        public string Content { get; set; } = string.Empty;
+
+        public int FirstChangedLine { get; set; }
+
+        public bool DeleteFile { get; set; }
+
+        public List<ChangedRange> ChangedRanges { get; set; } = new List<ChangedRange>();
     }
 
     public async Task<JObject> ApplyUnifiedDiffAsync(
@@ -86,7 +104,7 @@ internal sealed class PatchService
 
         var resolvedBaseDirectory = ResolveBaseDirectory(dte, baseDirectory);
         var appliedFiles = new JArray();
-        var filesToFocus = new List<(string Path, int Line)>();
+        var filesToFocus = new List<(string Path, List<ChangedRange> Ranges)>();
 
         foreach (var filePatch in filePatches)
         {
@@ -109,6 +127,7 @@ internal sealed class PatchService
                     ["status"] = "deleted",
                     ["firstChangedLine"] = result.FirstChangedLine,
                     ["hunkCount"] = filePatch.Hunks.Count,
+                    ["changedRanges"] = CreateChangedRangesArray(result.ChangedRanges),
                 });
             }
             else
@@ -120,7 +139,7 @@ internal sealed class PatchService
                     result.FirstChangedLine,
                     1,
                     saveChangedFiles).ConfigureAwait(true);
-                filesToFocus.Add((target.Path, result.FirstChangedLine));
+                filesToFocus.Add((target.Path, result.ChangedRanges));
 
                 appliedFiles.Add(new JObject
                 {
@@ -128,6 +147,7 @@ internal sealed class PatchService
                     ["status"] = target.IsNewFile ? "added" : "modified",
                     ["firstChangedLine"] = result.FirstChangedLine,
                     ["hunkCount"] = filePatch.Hunks.Count,
+                    ["changedRanges"] = CreateChangedRangesArray(result.ChangedRanges),
                     ["editorBacked"] = writeResult["editorBacked"] ?? false,
                     ["saved"] = writeResult["saved"] ?? saveChangedFiles,
                 });
@@ -136,7 +156,21 @@ internal sealed class PatchService
 
         if (openChangedFiles && filesToFocus.Count > 0)
         {
-            await documentService.OpenDocumentAsync(dte, filesToFocus[0].Path, filesToFocus[0].Line, 1).ConfigureAwait(true);
+            var primaryRange = filesToFocus[0].Ranges.FirstOrDefault();
+            if (primaryRange is not null)
+            {
+                await documentService.RevealDocumentRangeAsync(
+                    dte,
+                    filesToFocus[0].Path,
+                    primaryRange.StartLine,
+                    1,
+                    primaryRange.EndLine,
+                    1).ConfigureAwait(true);
+            }
+            else
+            {
+                await documentService.OpenDocumentAsync(dte, filesToFocus[0].Path, 1, 1).ConfigureAwait(true);
+            }
         }
         else
         {
@@ -153,6 +187,15 @@ internal sealed class PatchService
             ["visibleEdits"] = true,
             ["items"] = appliedFiles,
         };
+    }
+
+    private static JArray CreateChangedRangesArray(IEnumerable<ChangedRange> ranges)
+    {
+        return new JArray(ranges.Select(range => new JObject
+        {
+            ["startLine"] = range.StartLine,
+            ["endLine"] = range.EndLine,
+        }));
     }
 
     private static void EnsureSafeToModifyOpenDocument(DTE2 dte, string path)
@@ -261,6 +304,42 @@ internal sealed class PatchService
             }
         }
 
+        // Filesystem walk did not find the file. Search open VS documents as a fallback.
+        // This handles bare filenames (e.g. "connect.cpp") and relative paths from projects
+        // whose source tree is not under the solution directory.
+        var normalizedTarget = targetRelativePath.Replace('/', Path.DirectorySeparatorChar);
+        var targetFileName = System.IO.Path.GetFileName(normalizedTarget);
+        string? filenameMatch = null;
+
+        foreach (Document document in dte.Documents)
+        {
+            var docPath = document.FullName;
+            if (string.IsNullOrWhiteSpace(docPath) || !File.Exists(docPath))
+            {
+                continue;
+            }
+
+            // Prefer a document whose full path ends with the relative path from the patch.
+            var normalizedDocPath = docPath.Replace('/', Path.DirectorySeparatorChar);
+            if (normalizedDocPath.EndsWith(Path.DirectorySeparatorChar + normalizedTarget, StringComparison.OrdinalIgnoreCase) ||
+                normalizedDocPath.EndsWith(normalizedTarget, StringComparison.OrdinalIgnoreCase))
+            {
+                return (PathNormalization.NormalizeFilePath(docPath), isNewFile);
+            }
+
+            // Keep the first filename-only match as a lower-priority fallback.
+            if (filenameMatch is null &&
+                System.IO.Path.GetFileName(docPath).Equals(targetFileName, StringComparison.OrdinalIgnoreCase))
+            {
+                filenameMatch = docPath;
+            }
+        }
+
+        if (filenameMatch is not null)
+        {
+            return (PathNormalization.NormalizeFilePath(filenameMatch), isNewFile);
+        }
+
         return (PathNormalization.NormalizeFilePath(Path.Combine(baseDirectory, targetRelativePath)), isNewFile);
     }
 
@@ -336,7 +415,7 @@ internal sealed class PatchService
             previousActiveDocument.Value.Column).ConfigureAwait(true);
     }
 
-    private static (string Content, int FirstChangedLine, bool DeleteFile) ApplyFilePatch(string path, FilePatch patch)
+    private static ApplyFilePatchResult ApplyFilePatch(string path, FilePatch patch)
     {
         var existingText = File.Exists(path) ? File.ReadAllText(path) : string.Empty;
         var newline = DetectNewline(existingText);
@@ -345,6 +424,7 @@ internal sealed class PatchService
         var sourceIndex = 0;
         var firstChangedLine = 1;
         var firstChangeCaptured = false;
+        var changedRanges = new List<ChangedRange>();
 
         foreach (var hunk in patch.Hunks)
         {
@@ -359,6 +439,9 @@ internal sealed class PatchService
                 resultLines.Add(existingLines[sourceIndex]);
                 sourceIndex++;
             }
+
+            int? hunkStartLine = null;
+            var hunkAddedLineCount = 0;
 
             foreach (var line in hunk.Lines)
             {
@@ -377,6 +460,8 @@ internal sealed class PatchService
                             firstChangeCaptured = true;
                         }
 
+                        hunkStartLine ??= Math.Max(1, resultLines.Count + 1);
+
                         sourceIndex++;
                         break;
                     case '+':
@@ -386,11 +471,26 @@ internal sealed class PatchService
                             firstChangeCaptured = true;
                         }
 
+                        hunkStartLine ??= Math.Max(1, resultLines.Count + 1);
+                        hunkAddedLineCount++;
                         resultLines.Add(line.Text);
                         break;
                     default:
                         throw new CommandErrorException("invalid_arguments", $"Unsupported hunk line prefix '{line.Kind}' in patch for {path}.");
                 }
+            }
+
+            if (hunkStartLine.HasValue)
+            {
+                var startLine = hunkStartLine.Value;
+                var endLine = hunkAddedLineCount > 0
+                    ? startLine + hunkAddedLineCount - 1
+                    : startLine;
+                changedRanges.Add(new ChangedRange
+                {
+                    StartLine = startLine,
+                    EndLine = endLine,
+                });
             }
         }
 
@@ -402,7 +502,13 @@ internal sealed class PatchService
 
         var deleteFile = patch.NewPath == "/dev/null";
         var content = JoinLines(resultLines, newline, deleteFile ? false : hadFinalNewline || patch.OldPath == "/dev/null");
-        return (content, firstChangedLine, deleteFile);
+        return new ApplyFilePatchResult
+        {
+            Content = content,
+            FirstChangedLine = firstChangedLine,
+            DeleteFile = deleteFile,
+            ChangedRanges = changedRanges,
+        };
     }
 
     private static void EnsureLineMatches(string path, IReadOnlyList<string> existingLines, int index, string expected, string operation)

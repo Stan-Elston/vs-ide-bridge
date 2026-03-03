@@ -46,6 +46,8 @@ internal abstract class IdeCommandBase
 
     internal string Name => CanonicalName;
 
+    internal virtual bool AllowAutomationInvocation => true;
+
     internal Task<CommandExecutionResult> ExecuteDirectAsync(IdeCommandContext ctx, CommandArguments args)
         => ExecuteAsync(ctx, args);
 

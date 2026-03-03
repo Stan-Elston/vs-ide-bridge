@@ -80,6 +80,50 @@ internal sealed class DocumentService
         };
     }
 
+    public async Task<JObject> RevealDocumentRangeAsync(
+        DTE2 dte,
+        string filePath,
+        int startLine,
+        int startColumn,
+        int endLine,
+        int endColumn)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        var normalizedPath = PathNormalization.NormalizeFilePath(filePath);
+        if (!File.Exists(normalizedPath))
+        {
+            throw new CommandErrorException("document_not_found", $"File not found: {normalizedPath}");
+        }
+
+        var window = dte.ItemOperations.OpenFile(normalizedPath);
+        window.Activate();
+
+        if (window.Document?.Object("TextDocument") is TextDocument textDocument)
+        {
+            var selection = textDocument.Selection;
+            SelectRange(
+                textDocument,
+                selection,
+                Math.Max(1, startLine),
+                Math.Max(1, startColumn),
+                Math.Max(1, endLine),
+                Math.Max(1, endColumn));
+            TryShowActivePoint(selection);
+        }
+
+        return new JObject
+        {
+            ["resolvedPath"] = normalizedPath,
+            ["name"] = Path.GetFileName(normalizedPath),
+            ["startLine"] = Math.Max(1, startLine),
+            ["startColumn"] = Math.Max(1, startColumn),
+            ["endLine"] = Math.Max(1, endLine),
+            ["endColumn"] = Math.Max(1, endColumn),
+            ["windowCaption"] = window.Caption,
+        };
+    }
+
     public async Task<JObject> WriteDocumentTextAsync(
         DTE2 dte,
         string filePath,
@@ -831,6 +875,39 @@ internal sealed class DocumentService
         {
             // Some editor surfaces may not support viewport repositioning.
         }
+    }
+
+    private static void SelectRange(
+        TextDocument textDocument,
+        TextSelection selection,
+        int startLine,
+        int startColumn,
+        int endLine,
+        int endColumn)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var resolvedStartLine = Math.Max(1, startLine);
+        var resolvedStartColumn = Math.Max(1, startColumn);
+        var resolvedEndLine = Math.Max(resolvedStartLine, endLine);
+        var resolvedEndColumn = Math.Max(1, endColumn);
+
+        selection.MoveToLineAndOffset(resolvedStartLine, resolvedStartColumn, false);
+
+        if (resolvedEndLine <= resolvedStartLine)
+        {
+            selection.EndOfLine(true);
+            return;
+        }
+
+        var documentEndLine = textDocument.EndPoint.Line;
+        if (resolvedEndLine >= documentEndLine)
+        {
+            selection.EndOfDocument(true);
+            return;
+        }
+
+        selection.MoveToLineAndOffset(resolvedEndLine + 1, resolvedEndColumn, true);
     }
 
     private static string GetLineText(TextDocument textDocument, int lineNumber)

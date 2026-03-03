@@ -12,10 +12,13 @@ namespace VsIdeBridge.Services;
 
 internal sealed class VsCommandService
 {
+    private const string InternalBridgeCommandPrefix = "Tools.VsIdeBridge";
+
     public async Task<JObject> ExecuteCommandAsync(DTE2 dte, string commandName, string? commandArgs)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
+        EnsureCommandAllowed(commandName);
         var command = ResolveCommand(dte, commandName);
         try
         {
@@ -117,6 +120,7 @@ internal sealed class VsCommandService
                 .ConfigureAwait(true)
             : null;
 
+        EnsureCommandAllowed(commandName);
         var command = ResolveCommand(dte, commandName);
         try
         {
@@ -136,6 +140,16 @@ internal sealed class VsCommandService
             data["location"] = location;
         }
         return data;
+    }
+
+    private static void EnsureCommandAllowed(string commandName)
+    {
+        if (commandName.StartsWith(InternalBridgeCommandPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new CommandErrorException(
+                "command_not_allowed",
+                $"Visual Studio bridge UI commands are not callable over automation: {commandName}");
+        }
     }
 
     private static JObject CreateCommandInfo(Command command, string? commandArgs)

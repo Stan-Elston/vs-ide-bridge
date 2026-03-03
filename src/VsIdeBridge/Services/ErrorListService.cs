@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -8,6 +9,7 @@ using EnvDTE;
 using EnvDTE80;
 using Microsoft.VisualStudio.Shell;
 using Newtonsoft.Json.Linq;
+using System.Runtime.InteropServices;
 using VsIdeBridge.Infrastructure;
 
 namespace VsIdeBridge.Services;
@@ -48,8 +50,15 @@ internal sealed class ErrorListService
     private const int StableSampleCount = 3;
     private const int PopulationPollIntervalMilliseconds = 2000;
 
+    private static readonly string[] BuildOutputPaneNames = { "Build", "Build Order" };
     private static readonly Regex ExplicitCodePattern = new(
         @"\b(?:LINK|LNK|MSB|VCR|E|C)\d+\b|\blnt-[a-z0-9-]+\b|\bInt-make\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex MsBuildDiagnosticPattern = new(
+        @"^(?<file>[A-Za-z]:\\.*?|\S.*?)(?:\((?<line>\d+)(?:,(?<column>\d+))?\))?\s*:\s*(?<severity>warning|error)\s+(?<code>[A-Za-z]+[A-Za-z0-9-]*)\s*:\s*(?<message>.+?)(?:\s+\[(?<project>[^\]]+)\])?$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex StructuredOutputPattern = new(
+        @"^(?<project>.+?)\s*>\s*(?<file>[A-Za-z]:\\.*?|\S.*?)(?:\((?<line>\d+)(?:,(?<column>\d+))?\))?\s*:\s*(?<severity>warning|error)\s+(?<code>[A-Za-z]+[A-Za-z0-9-]*)\s*:\s*(?<message>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private readonly ReadinessService _readinessService;
@@ -84,10 +93,20 @@ internal sealed class ErrorListService
             {
                 rows = Array.Empty<JObject>();
             }
+
+            if (rows.Count == 0)
+            {
+                rows = ReadBuildOutputRows(context.Dte);
+            }
         }
         else
         {
             rows = await WaitForRowsAsync(context, timeoutMilliseconds).ConfigureAwait(true);
+            if (rows.Count == 0)
+            {
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
+                rows = ReadBuildOutputRows(context.Dte);
+            }
         }
         var filteredRows = ApplyQuery(rows, query).ToArray();
         var severityCounts = CreateSeverityCounts();
@@ -218,6 +237,65 @@ internal sealed class ErrorListService
         return rows;
     }
 
+    private static IReadOnlyList<JObject> ReadBuildOutputRows(DTE2 dte)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var pane = TryGetBuildOutputPane(dte);
+        if (pane is null)
+        {
+            return Array.Empty<JObject>();
+        }
+
+        var text = TryReadBuildOutputText(dte, pane);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return Array.Empty<JObject>();
+        }
+
+        var rows = new List<JObject>();
+        using var reader = new StringReader(text);
+        string? line;
+        while ((line = reader.ReadLine()) is not null)
+        {
+            if (TryParseBuildOutputLine(line, out var row))
+            {
+                rows.Add(row);
+            }
+        }
+
+        return rows;
+    }
+
+    private static string TryReadBuildOutputText(DTE2 dte, OutputWindowPane pane)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        ActivateBuildOutputPane(dte, pane);
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            try
+            {
+                return pane.TextDocument is TextDocument textDocument
+                    ? ReadTextDocument(textDocument)
+                    : string.Empty;
+            }
+            catch (COMException)
+            {
+                if (attempt == 0)
+                {
+                    ActivateBuildOutputPane(dte, pane);
+                    continue;
+                }
+
+                return string.Empty;
+            }
+        }
+
+        return string.Empty;
+    }
+
     private static void EnsureErrorListWindow(DTE2 dte)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
@@ -234,6 +312,120 @@ internal sealed class ErrorListService
         catch
         {
         }
+    }
+
+    private static void ActivateBuildOutputPane(DTE2 dte, OutputWindowPane pane)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        try
+        {
+            dte.ExecuteCommand("View.Output", string.Empty);
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            pane.Activate();
+        }
+        catch
+        {
+        }
+    }
+
+    private static OutputWindowPane? TryGetBuildOutputPane(DTE2 dte)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        foreach (OutputWindowPane pane in dte.ToolWindows.OutputWindow.OutputWindowPanes)
+        {
+            var paneName = pane.Name;
+            foreach (var candidateName in BuildOutputPaneNames)
+            {
+                if (string.Equals(paneName, candidateName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return pane;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static string ReadTextDocument(TextDocument textDocument)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var start = textDocument.StartPoint.CreateEditPoint();
+        return start.GetText(textDocument.EndPoint);
+    }
+
+    private static bool TryParseBuildOutputLine(string line, out JObject row)
+    {
+        row = null!;
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return false;
+        }
+
+        var match = StructuredOutputPattern.Match(line);
+        if (!match.Success)
+        {
+            match = MsBuildDiagnosticPattern.Match(line);
+        }
+
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        var severity = NormalizeParsedSeverity(match.Groups["severity"].Value);
+        var description = match.Groups["message"].Value.Trim();
+        var project = match.Groups["project"].Value.Trim();
+        var file = NormalizeFilePath(match.Groups["file"].Value.Trim());
+        var lineNumber = ParseOptionalInt(match.Groups["line"].Value);
+        var columnNumber = ParseOptionalInt(match.Groups["column"].Value);
+        var code = NormalizeCode(match.Groups["code"].Value, description, project, file, lineNumber);
+
+        row = new JObject
+        {
+            ["severity"] = severity,
+            ["code"] = code,
+            ["codeFamily"] = InferCodeFamily(code),
+            ["tool"] = InferTool(code, description),
+            ["message"] = description,
+            ["project"] = project,
+            ["file"] = file,
+            ["line"] = lineNumber,
+            ["column"] = columnNumber,
+            ["symbols"] = new JArray(ExtractSymbols(description)),
+            ["source"] = "build-output",
+        };
+        return true;
+    }
+
+    private static string NormalizeParsedSeverity(string severity)
+    {
+        return severity.Equals("error", StringComparison.OrdinalIgnoreCase) ? "Error" : "Warning";
+    }
+
+    private static string NormalizeFilePath(string value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? string.Empty : PathNormalization.NormalizeFilePath(value);
+    }
+
+    private static int ParseOptionalInt(string value)
+    {
+        return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
+    }
+
+    private static string NormalizeCode(string explicitCode, string description, string project, string fileName, int line)
+    {
+        return !string.IsNullOrWhiteSpace(explicitCode)
+            ? explicitCode
+            : InferCode(description, project, fileName, line);
     }
 
     private static Window? TryGetErrorListWindow(DTE2 dte)

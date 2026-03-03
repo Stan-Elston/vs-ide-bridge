@@ -10,11 +10,11 @@ This project is experimental. Use it at your own risk.
 
 Lets you drive a running Visual Studio instance from outside the IDE: search code, navigate to symbols, slice documents, apply diffs, control the debugger, and capture build output — all without touching the keyboard.
 
-Commands are invoked through simple pipe names like `state`, `search-symbols`, and `quick-info`. The legacy `Tools.Ide*` names still work for compatibility. Results are written as JSON to a caller-specified output file.
+Commands are invoked through simple pipe names like `state`, `search-symbols`, and `quick-info`. The legacy `Tools.Ide*` names still work for compatibility. The native CLI can print `json`, `summary`, or `keyvalue` to stdout and can also write envelopes to a caller-specified output file.
 
 ## LLM Workflow
 
-Use this four-step pattern:
+Use this five-step pattern:
 
 1. `vs-ide-bridge help`
 2. `vs-ide-bridge ensure --solution C:\path\to\Your.sln`
@@ -32,9 +32,13 @@ If you need to extract one field from a saved bridge result, run `vs-ide-bridge 
 - Windows
 - Visual Studio 2026 / 18
 
-The extension targets VS 18, but the helper scripts in `scripts\` probe the `Community` install path first and then fall back to the VS 2022 Community path. If you use Professional or Enterprise, adjust those paths in the scripts.
+The extension targets VS 18. The build script probes the `Community` install path first and then falls back to the VS 2022 Community path. If you use Professional or Enterprise, adjust that path in `scripts\build.bat`.
 
-## Build
+## Build And Install
+
+Close all Visual Studio instances before updating the extension. If `devenv.exe` is still running, `VsIdeBridge.dll` can stay locked and the install step will fail even when the build succeeds.
+
+### Preferred Full Build
 
 ```bat
 scripts\build.bat
@@ -49,6 +53,48 @@ Debug is the default configuration. Pass a configuration name as the first argum
 
 ```bat
 scripts\build.bat Release
+```
+
+### Managed-Only Fallback Build
+
+If the full solution build fails in an unrelated native project, such as `src\IdeBridgeJsonProbe\IdeBridgeJsonProbe.vcxproj`, build just the bridge extension and CLI:
+
+```bat
+"C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" src\VsIdeBridge\VsIdeBridge.csproj /restore /p:Configuration=Debug
+dotnet build src\VsIdeBridgeCli\VsIdeBridgeCli.csproj -c Debug
+```
+
+This is enough to produce:
+
+- `src\VsIdeBridge\bin\Debug\net472\VsIdeBridge.vsix`
+- `src\VsIdeBridge\bin\Debug\net472\VsIdeBridge.dll`
+- `src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe`
+
+### Install Or Update The Extension
+
+Preferred install:
+
+1. Close all Visual Studio instances.
+2. Install `src\VsIdeBridge\bin\Debug\net472\VsIdeBridge.vsix`.
+
+If you are iterating on a locally installed private build and VSIX install is failing, update the already-installed extension folder directly while Visual Studio is closed:
+
+1. Find the installed folder under `%LOCALAPPDATA%\Microsoft\VisualStudio\18.0_*\Extensions\`.
+2. Copy these files from `src\VsIdeBridge\bin\Debug\net472\` into that folder:
+   - `VsIdeBridge.dll`
+   - `VsIdeBridge.pkgdef`
+   - `extension.vsixmanifest`
+
+This is the exact fallback path to use when the extension is installed but the old DLL is locked or the VSIX install step is not cooperating.
+
+### Validate The Install
+
+After install, verify the bridge with:
+
+```bat
+src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe ensure --solution "C:\path\to\Your.sln"
+src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe current --format keyvalue
+src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe catalog --instance <instanceId>
 ```
 
 ## Start The Bridge
@@ -93,12 +139,14 @@ Optional parameters:
 
 ## Quick Start
 
-1. Run `scripts\build.bat`.
-2. Install `src\VsIdeBridge\bin\Debug\net472\VsIdeBridge.vsix` if the extension is not already installed.
-3. Run `src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe ensure --solution "C:\path\to\Your.sln"`.
-4. Run `src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe current`.
-5. Run `src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe help` if you need a refresher.
-6. Send commands with `src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe`.
+1. Close Visual Studio.
+2. Build with `scripts\build.bat`.
+3. If that fails in a non-bridge native project, use the managed-only fallback build above.
+4. Install `src\VsIdeBridge\bin\Debug\net472\VsIdeBridge.vsix`.
+5. Run `src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe ensure --solution "C:\path\to\Your.sln"`.
+6. Run `src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe current`.
+7. Run `src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe help` if you need a refresher.
+8. Send commands with `src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe`.
 
 ## Command Surface
 
@@ -112,6 +160,7 @@ The tables below list the preferred simple pipe names. The live `catalog` comman
 | `state` | Snapshot of IDE state (solution path, active document, etc.) |
 | `ready` | Block until IntelliSense is available |
 | `open-solution` | Open a solution file |
+| `close` | Close the targeted Visual Studio instance gracefully |
 | `batch` | Execute multiple commands in one pipe round-trip |
 
 ### Search and Navigation
@@ -122,14 +171,17 @@ The tables below list the preferred simple pipe names. The live `catalog` comman
 | `find-files` | Find files by name |
 | `parse` | Parse saved JSON locally with slash-path selection |
 | `document-slice` | Fetch lines around a location |
-| `file-outline` | Symbol list for a file (functions, classes, etc.) |
+| `document-slices` | Fetch multiple document ranges from a JSON file or inline JSON |
+| `file-symbols` | Symbol list for a file, with optional kind filtering |
+| `file-outline` | Alias for `file-symbols` |
 | `search-symbols` | Search symbols by name across the current scope |
 | `quick-info` | Resolve symbol/definition info at a location |
-| `document-slices` | Fetch multiple document ranges from a JSON ranges file |
 | `smart-context` | Multi-context gather for agent queries |
 | `find-references` | Semantic find-all-references |
 | `call-hierarchy` | Callers and callees |
 | `goto-definition` | Navigate to definition (F12) |
+| `peek-definition` | Peek definition inline |
+| `goto-implementation` | Navigate to implementation |
 | `open-document` | Open a file at a line/column |
 | `list-documents` | List open documents |
 | `list-tabs` | List open editor tabs |
@@ -144,6 +196,8 @@ The tables below list the preferred simple pipe names. The live `catalog` comman
 
 ### Breakpoints
 
+> These are pipe commands, not first-class CLI verbs. Use `send --command <name>` to invoke them.
+
 | Command | Description |
 |---------|-------------|
 | `set-breakpoint` | Set a breakpoint at file/line |
@@ -156,6 +210,8 @@ The tables below list the preferred simple pipe names. The live `catalog` comman
 | `disable-all-breakpoints` | Disable every breakpoint |
 
 ### Debugger
+
+> These are pipe commands, not first-class CLI verbs. Use `send --command <name>` to invoke them.
 
 | Command | Description |
 |---------|-------------|
@@ -173,8 +229,9 @@ The tables below list the preferred simple pipe names. The live `catalog` comman
 | Command | Description |
 |---------|-------------|
 | `build` | Build the solution |
-| `errors` | Capture the Error List as JSON |
-| `build-errors` | Build then capture the Error List in one call |
+| `warnings` | Capture warnings from the Error List, or Build Output fallback, as JSON |
+| `errors` | Capture errors from the Error List, or Build Output fallback, as JSON |
+| `build-errors` | Build then capture diagnostics in one call |
 
 ## Argument Contract
 
@@ -217,10 +274,10 @@ list-windows --query "Error List" --out "C:\temp\windows.json"
 execute-command --command "View.SolutionExplorer" --out "C:\temp\exec.json"
 apply-diff --patch-file "C:\temp\change.diff" --out "C:\temp\apply.json"
 
-set-breakpoint --file "C:\repo\src\foo.cpp" --line 42 --condition "count == 12" --out "C:\temp\bp.json"
-list-breakpoints --out "C:\temp\breakpoints.json"
-debug-start --wait-for-break true --timeout-ms 120000 --out "C:\temp\debug-start.json"
-debug-continue --wait-for-break true --timeout-ms 30000 --out "C:\temp\continue.json"
+send --command set-breakpoint --args "--file \"C:\repo\src\foo.cpp\" --line 42 --condition \"count == 12\"" --out "C:\temp\bp.json"
+send --command list-breakpoints --out "C:\temp\breakpoints.json"
+send --command debug-start --args "--wait-for-break true --timeout-ms 120000" --out "C:\temp\debug-start.json"
+send --command debug-continue --args "--wait-for-break true --timeout-ms 30000" --out "C:\temp\continue.json"
 
 errors --wait-for-intellisense false --quick --out "C:\temp\errors.json"
 build --configuration Debug --platform x64 --out "C:\temp\build.json"
@@ -230,7 +287,9 @@ build-errors --timeout-ms 600000 --out "C:\temp\build-errors.json"
 ### `errors` flags
 
 - `--wait-for-intellisense true` (default) — waits for IntelliSense to finish loading before reading
-- `--quick` — reads the Error List once immediately; skips the stability polling loop (use after a build has finished)
+- `--quick` — reads the current diagnostics snapshot immediately; skips the stability polling loop (use after a build has finished)
+
+On large C++ solutions, `errors` and `warnings` may return diagnostics from Build Output when the Error List is empty or too slow to enumerate.
 
 ### `batch`
 
@@ -367,6 +426,8 @@ src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe find-files --instance vs18
 src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe parse --json-file output\errors.json --select /Data/errors/rows/0/message
 ```
 
+> **Git Bash note:** Git Bash converts arguments that start with `/` to Windows paths. If `--select` fails with a Windows-path error, either omit the leading slash (`Data/foo` instead of `/Data/foo`) or prefix the command with `MSYS_NO_PATHCONV=1`.
+
 Batch request:
 
 ```bat
@@ -383,28 +444,42 @@ src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe request --json-file output
 Supported verbs:
 
 - `help`
-- `prompts`
-- `recipes`
+- `prompts` (alias: `recipes`)
 - `current`
 - `instances`
-- `catalog`
-- `commands`
 - `ensure`
 - `ready`
 - `state`
-- `errors`
-- `build-errors`
+- `catalog` (alias: `commands`)
+- `parse`
 - `find-files`
 - `find-text`
-- `parse`
-- `search-symbols`
+- `search-symbols` (alias: `symbols`)
+- `goto-definition`
+- `peek-definition` (alias: `peek`)
+- `goto-implementation`
+- `find-references`
+- `call-hierarchy`
 - `quick-info`
+- `document-slice` (alias: `slice`)
+- `document-slices` (alias: `slices`)
 - `file-symbols`
-- `document-slice`
-- `document-slices`
+- `file-outline`
 - `open-document`
-- `send`
-- `call`
+- `list-documents`
+- `list-tabs`
+- `activate-document`
+- `close-document`
+- `close-file`
+- `close-others`
+- `list-windows`
+- `activate-window`
+- `apply-diff` (alias: `patch`)
+- `build`
+- `warnings` (alias: `warning`)
+- `errors`
+- `build-errors`
+- `send` (alias: `call`)
 - `batch`
 - `request`
 

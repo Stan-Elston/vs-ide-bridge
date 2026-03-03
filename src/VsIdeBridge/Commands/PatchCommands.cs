@@ -1,7 +1,9 @@
 using System.ComponentModel.Design;
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
 using VsIdeBridge.Infrastructure;
 using VsIdeBridge.Services;
 
@@ -20,11 +22,10 @@ internal static class PatchCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
+            var approvedOnce = false;
             if (!context.Runtime.UiSettings.AllowBridgeEdits)
             {
-                throw new CommandErrorException(
-                    "edits_disabled",
-                    "Bridge edits are disabled. Enable IDE Bridge > Allow Bridge Edits before applying changes.");
+                approvedOnce = await RequestOneTimeEditApprovalAsync(context).ConfigureAwait(true);
             }
 
             string? patchText = null;
@@ -57,7 +58,42 @@ internal static class PatchCommands
                 openChangedFiles,
                 args.GetBoolean("save-changed-files", false)).ConfigureAwait(true);
 
+            data["approval"] = approvedOnce ? "one-time" : "persistent";
+
             return new CommandExecutionResult($"Applied unified diff to {data["count"]} file(s).", data);
+        }
+
+        private static async Task<bool> RequestOneTimeEditApprovalAsync(IdeCommandContext context)
+        {
+            await context.Logger.LogAsync(
+                "IDE Bridge: waiting for edit approval in Visual Studio.",
+                context.CancellationToken,
+                activatePane: true).ConfigureAwait(true);
+
+            var result = VsShellUtilities.ShowMessageBox(
+                context.Package,
+                "An external IDE Bridge request wants to edit files in this solution.\r\n\r\n" +
+                "Yes: allow this edit request once.\r\n" +
+                "No: keep edits blocked.\r\n\r\n" +
+                "Use IDE Bridge > Allow Bridge Edits if you want to allow future edits without prompts.",
+                "IDE Bridge Approval Required",
+                OLEMSGICON.OLEMSGICON_QUERY,
+                OLEMSGBUTTON.OLEMSGBUTTON_YESNO,
+                OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_SECOND);
+
+            if (result == (int)VSConstants.MessageBoxResult.IDYES)
+            {
+                await context.Logger.LogAsync(
+                    "IDE Bridge: one-time edit approval granted.",
+                    context.CancellationToken,
+                    activatePane: true).ConfigureAwait(true);
+                return true;
+            }
+
+            throw new CommandErrorException(
+                "edit_approval_denied",
+                "Bridge edit approval was denied. Wait for a human to approve the Visual Studio prompt, or enable IDE Bridge > Allow Bridge Edits.",
+                new { approvalRequested = true, persistentSettingEnabled = false });
         }
     }
 }

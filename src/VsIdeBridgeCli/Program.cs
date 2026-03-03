@@ -210,6 +210,12 @@ internal static class CliApp
                 builder.Add("kind", cli.GetValue("kind"));
                 builder.Add("max-depth", cli.GetValue("max-depth"));
             }),
+            "file-outline" => await RunStructuredCommandAsync("file-outline", options, static (builder, cli) =>
+            {
+                builder.AddRequired("file", cli.GetValue("file"));
+                builder.Add("kind", cli.GetValue("kind"));
+                builder.Add("max-depth", cli.GetValue("max-depth"));
+            }),
             "build" => await RunStructuredCommandAsync("build", options, static (builder, cli) =>
             {
                 builder.Add("configuration", cli.GetValue("configuration"));
@@ -258,6 +264,7 @@ internal static class CliApp
                 builder.AddFlag("wait-for-intellisense", cli.GetFlag("wait-for-intellisense"));
             }),
             "send" or "call" => await RunSendAsync(options),
+            "close" => await RunSimpleCommandAsync("close-ide", options, "summary"),
             "batch" => await RunBatchAsync(options),
             "request" => await RunRawRequestAsync(options),
             _ => throw new CliException($"Unknown command '{verb}'. Run 'vs-ide-bridge help'."),
@@ -308,6 +315,15 @@ internal static class CliApp
 
         var node = ParseJson(jsonText!);
         var select = options.GetValue("select") ?? options.GetValue("path");
+        if (select is not null && select.Length >= 3 && char.IsLetter(select[0]) && select[1] == ':' && (select[2] == '/' || select[2] == '\\'))
+        {
+            throw new CliException(
+                $"--select value looks like a Windows path ('{select}'). " +
+                "Git Bash converts leading '/' in arguments to a Windows path. " +
+                "Either omit the leading slash (e.g. Data/foo instead of /Data/foo) " +
+                "or prefix the command with MSYS_NO_PATHCONV=1.");
+        }
+
         var selected = SelectJsonNode(node, select);
         var format = options.GetValue("format") ?? ParseFormatter.GetDefaultFormat(selected, select);
         var text = ParseFormatter.Format(selected, format, select);
@@ -809,6 +825,8 @@ internal static class CliApp
             "call-hierarchy" => HelpText.CallHierarchy,
             "quick-info" => HelpText.QuickInfo,
             "file-symbols" => HelpText.FileSymbols,
+            "file-outline" => HelpText.FileSymbols,
+            "close" => HelpText.Close,
             "send" => HelpText.Send,
             "batch" => HelpText.Batch,
             "request" => HelpText.Request,
@@ -852,6 +870,7 @@ internal static class HelpText
           search-symbols  Search symbols semantically by name
           quick-info      Resolve symbol info at a location
           file-symbols    List symbols from one file
+          file-outline    List symbols from one file (alias for file-symbols)
           apply-diff      Apply a unified diff visibly in Visual Studio
           document-slice  Fetch one code slice
           document-slices Fetch multiple code slices
@@ -862,6 +881,7 @@ internal static class HelpText
           errors          Capture the Error List
           warnings        Capture warning rows only
           build-errors    Build and capture errors
+          close           Close Visual Studio via the DTE API
           send            Send one bridge command
           call            Alias for send
           batch           Send a batch request
@@ -1543,6 +1563,20 @@ internal static class HelpText
         Examples
           vs-ide-bridge file-symbols --instance <instanceId> --file C:\repo\src\foo.cpp
           vs-ide-bridge file-symbols --instance <instanceId> --file C:\repo\src\foo.cpp --kind function
+        """;
+
+    public const string Close =
+        """
+        close
+
+        Purpose
+          Close Visual Studio gracefully using the DTE Quit API.
+
+        Options
+          --instance <id>    Target VS instance (required if multiple are running)
+
+        Example
+          vs-ide-bridge close --instance <instanceId>
         """;
 
     public const string Send =
@@ -2353,6 +2387,17 @@ internal sealed class CliOptions
             }
 
             var name = token[2..];
+
+            // Support --key=value syntax. This is required when the value itself starts with
+            // '--' (e.g. --args="--command foo"), because the lookahead heuristic below would
+            // otherwise treat '--args' as a boolean flag when the next token begins with '--'.
+            var eqIndex = name.IndexOf('=', StringComparison.Ordinal);
+            if (eqIndex >= 0)
+            {
+                options._values[name[..eqIndex]] = name[(eqIndex + 1)..];
+                continue;
+            }
+
             if (i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal))
             {
                 options._values[name] = args[++i];
