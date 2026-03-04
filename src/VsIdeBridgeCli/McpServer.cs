@@ -595,7 +595,7 @@ internal static partial class CliApp
         private static async Task<string> ResolveGitWorkingDirectoryAsync(JsonNode? id, CliOptions options)
         {
             var state = await SendBridgeAsync(id, options, "state", string.Empty).ConfigureAwait(false);
-            var data = state["data"] as JsonObject ?? state["Data"] as JsonObject;
+            var data = state["Data"] as JsonObject;
             var solutionPath = data?["solutionPath"]?.GetValue<string>() ?? string.Empty;
             var directory = Path.GetDirectoryName(solutionPath);
             if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
@@ -763,7 +763,7 @@ internal static partial class CliApp
             }
 
             var closeUri = $"https://api.github.com/repos/{repo}/issues/{issueNumber}";
-            return await SendGitHubRequestAsync(new HttpMethod("PATCH"), closeUri, token, new JsonObject { ["state"] = "closed" }).ConfigureAwait(false);
+            return await SendGitHubRequestAsync(HttpMethod.Patch, closeUri, token, new JsonObject { ["state"] = "closed" }).ConfigureAwait(false);
         }
 
         private static async Task<string?> ResolveGitHubRepoFromOriginAsync(string workingDirectory)
