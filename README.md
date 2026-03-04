@@ -534,6 +534,30 @@ Exposed MCP tools use simple names:
 - `search_symbols`
 - `quick_info`
 - `apply_diff`
+- `git_status`
+- `git_current_branch`
+- `git_remote_list`
+- `git_tag_list`
+- `git_stash_list`
+- `git_diff_unstaged`
+- `git_diff_staged`
+- `git_log`
+- `git_show`
+- `git_branch_list`
+- `git_checkout`
+- `git_create_branch`
+- `git_add`
+- `git_restore`
+- `git_commit`
+- `git_commit_amend`
+- `git_reset`
+- `git_fetch`
+- `git_stash_push`
+- `git_stash_pop`
+- `git_pull`
+- `git_push`
+- `github_issue_search`
+- `github_issue_close`
 
 Exposed MCP resources:
 
@@ -547,6 +571,9 @@ Exposed MCP prompts:
 - `help`
 - `fix_current_errors`
 - `open_solution_and_wait_ready`
+- `git_review_before_commit`
+- `git_sync_with_remote`
+- `github_issue_triage`
 
 The MCP layer is intentionally thin: it forwards to the bridge command surface and keeps edit approval/safety enforcement inside the existing Visual Studio bridge flow.
 
