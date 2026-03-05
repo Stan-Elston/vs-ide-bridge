@@ -312,6 +312,23 @@ build-errors --timeout-ms 600000 --out "C:\temp\build-errors.json"
 
 On large C++ solutions, `errors` and `warnings` may return diagnostics from Build Output when the Error List is empty or too slow to enumerate.
 
+### Error List prerequisites
+
+The VS Error List is **only populated after at least one file from the project is open in the editor.** If `errors` returns an empty list after switching solutions or opening VS fresh, open a source file first:
+
+```text
+open-document --file "src\slic3r\GUI\GUI_App.cpp"
+```
+
+Then wait for IntelliSense to finish before reading the error list. The CLI `errors` command does this automatically via `--wait-for-intellisense`. When using the MCP `errors` tool or calling `errors --quick` directly, call `ready` first:
+
+```text
+ready --timeout-ms 120000
+errors --quick
+```
+
+`ready` polls `IVsOperationProgressStatusService` for the IntelliSense stage completion and falls back to watching the status bar for "Ready". It returns immediately if IntelliSense is already done.
+
 ### `batch`
 
 Execute multiple commands in a single bridge request:
