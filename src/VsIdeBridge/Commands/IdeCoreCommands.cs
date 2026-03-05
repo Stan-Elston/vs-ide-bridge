@@ -530,7 +530,9 @@ internal static class IdeCoreCommands
             {
                 throw new CommandErrorException("file_not_found", $"Solution file not found: {solutionPath}");
             }
-            if (!string.Equals(Path.GetExtension(solutionPath), ".sln", StringComparison.OrdinalIgnoreCase))
+            var ext = Path.GetExtension(solutionPath);
+            if (!string.Equals(ext, ".sln", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(ext, ".slnx", StringComparison.OrdinalIgnoreCase))
             {
                 throw new CommandErrorException("invalid_file_type", $"File is not a solution file: {solutionPath}");
             }
@@ -542,6 +544,8 @@ internal static class IdeCoreCommands
 
     internal sealed class IdeCloseIdeCommand : IdeCommandBase
     {
+        private const int CloseIdeDelayMilliseconds = 300;
+
         public IdeCloseIdeCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
             : base(package, runtime, commandService, 0x0231)
         {
@@ -554,7 +558,7 @@ internal static class IdeCoreCommands
             // Schedule quit after the response is written to the pipe
             _ = Task.Run(async () =>
             {
-                await Task.Delay(300).ConfigureAwait(false);
+                await Task.Delay(CloseIdeDelayMilliseconds).ConfigureAwait(false);
                 await context.Package.JoinableTaskFactory.SwitchToMainThreadAsync();
                 context.Dte.Quit();
             });

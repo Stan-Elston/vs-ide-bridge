@@ -74,20 +74,37 @@ This is enough to produce:
 
 ### Install Or Update The Extension
 
-Preferred install:
+**Prerequisites — before running the installer:**
 
-1. Close all Visual Studio instances.
-2. Install `src\VsIdeBridge\bin\Debug\net472\VsIdeBridge.vsix`.
+1. Close Visual Studio (`send --command close-ide` via bridge, or File → Exit).
+2. Kill any lingering helper processes — `clangd.exe`, `ServiceHub.RoslynCodeAnalysisService.exe`, `DevHub.exe` — they block the installer even after VS exits.
+3. If the version in `source.extension.vsixmanifest` has not changed since the last install, bump it (e.g. `0.1.0` → `0.1.1`); the installer exits 209 ("already installed") otherwise and copies nothing.
 
-If you are iterating on a locally installed private build and VSIX install is failing, update the already-installed extension folder directly while Visual Studio is closed:
+**Install command — use PowerShell, not `cmd.exe /c`:**
+
+`cmd.exe /c` silently swallows errors and returns exit 0 without running the installer. Use PowerShell `Start-Process` with an argument array instead:
+
+```powershell
+powershell.exe -Command "
+  \$p = Start-Process \`
+    -FilePath 'C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\VSIXInstaller.exe' \`
+    -ArgumentList @('/quiet', '/instanceIds:8fd42dc7', 'C:\path\to\VsIdeBridge.vsix') \`
+    -PassThru -Wait
+  Write-Host \"Exit: \$(\$p.ExitCode)\"
+"
+```
+
+Exit 0 = success. A new log appears in `%TEMP%\dd_VSIXInstaller_*.log` and a new folder under `%LOCALAPPDATA%\Microsoft\VisualStudio\18.0_8fd42dc7\Extensions\` contains `VsIdeBridge.dll`.
+
+**Direct-copy fallback** (when the installer is not cooperating):
 
 1. Find the installed folder under `%LOCALAPPDATA%\Microsoft\VisualStudio\18.0_*\Extensions\`.
-2. Copy these files from `src\VsIdeBridge\bin\Debug\net472\` into that folder:
+2. Copy these files from `src\VsIdeBridge\bin\Debug\net472\` into that folder while VS is closed:
    - `VsIdeBridge.dll`
    - `VsIdeBridge.pkgdef`
    - `extension.vsixmanifest`
 
-This is the exact fallback path to use when the extension is installed but the old DLL is locked or the VSIX install step is not cooperating.
+Start Visual Studio after either method; it picks up the updated extension on the next load.
 
 ### Validate The Install
 
