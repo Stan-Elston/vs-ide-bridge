@@ -19,7 +19,7 @@ internal static partial class CliApp
     private static class McpServer
     {
         private static readonly string McpLog = @"C:\Temp\mcp-server.log";
-        private static readonly byte[] RawJsonTerminator = new byte[] { (byte)'\n' };
+        private static readonly byte[] RawJsonTerminator = [(byte)'\n'];
 
         private enum McpWireFormat
         {
@@ -235,6 +235,9 @@ internal static partial class CliApp
             var method = request["method"]?.GetValue<string>() ?? string.Empty;
             var @params = request["params"] as JsonObject;
 
+            if (method.StartsWith("notifications/", StringComparison.Ordinal))
+                return null;
+
             JsonNode result = method switch
             {
                 "initialize" => InitializeResult(),
@@ -245,14 +248,8 @@ internal static partial class CliApp
                 "prompts/list" => new JsonObject { ["prompts"] = ListPrompts() },
                 "prompts/get" => GetPrompt(id, @params),
                 "ping" => new JsonObject(),
-                "notifications/initialized" => null!,
                 _ => throw new McpRequestException(id, -32601, $"Unsupported MCP method: {method}"),
             };
-
-            if (method == "notifications/initialized")
-            {
-                return null;
-            }
 
             return new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id, ["result"] = result };
         }
@@ -320,7 +317,7 @@ internal static partial class CliApp
                     ("column", IntegerSchema("1-based column number."), true))),
             Tool(
                 "apply_diff",
-                "Apply unified diff through Visual Studio editor buffer.",
+                "Apply unified diff through Visual Studio editor buffer. Changes are saved and opened automatically.",
                 ObjectSchema(
                     ("patch", StringSchema("Unified diff text."), true))),
             Tool("git_status", "Get repository status in porcelain mode.", EmptySchema()),
@@ -409,7 +406,7 @@ internal static partial class CliApp
                     ("whole_word", BooleanSchema("Match whole word only (default false)."), false))),
             Tool(
                 "read_file",
-                "Read lines from a file open in the solution. Use start_line/end_line for a range, or line with context_before/context_after centered on an anchor.",
+                "Read lines from a file. Use start_line/end_line for a range, or line with context_before/context_after centered on an anchor.",
                 ObjectSchema(
                     ("file", StringSchema("Absolute or solution-relative file path."), true),
                     ("start_line", IntegerSchema("First 1-based line to read. Use with end_line for a range."), false),
@@ -438,9 +435,14 @@ internal static partial class CliApp
                     ("file", StringSchema("Absolute or solution-relative file path."), true))),
             Tool(
                 "build",
-                "Trigger a solution build and return errors/warnings. Start the MCP server with --timeout-ms 300000 or higher for builds.",
+                "Trigger a solution build and return errors/warnings. Builds may take several minutes.",
                 ObjectSchema(
                     ("configuration", StringSchema("Optional build configuration (e.g. Debug, Release)."), false))),
+            Tool(
+                "open_solution",
+                "Open a solution file in the current Visual Studio instance without opening a new window.",
+                ObjectSchema(
+                    ("solution", StringSchema("Absolute path to the .sln file to open."), true))),
         };
 
         private static JsonObject Tool(string name, string description, JsonObject inputSchema) => new()
@@ -521,13 +523,14 @@ internal static partial class CliApp
                 "find_files" => ("find-files", BuildArgs(("query", args?["query"]?.GetValue<string>()))),
                 "search_symbols" => ("search-symbols", BuildArgs(("query", args?["query"]?.GetValue<string>()), ("kind", args?["kind"]?.GetValue<string>()))),
                 "quick_info" => ("quick-info", BuildArgs(("file", args?["file"]?.GetValue<string>()), ("line", args?["line"]?.ToString()), ("column", args?["column"]?.ToString()))),
-                "apply_diff" => ("apply-diff", BuildArgs(("patch-text-base64", Convert.ToBase64String(Encoding.UTF8.GetBytes(args?["patch"]?.GetValue<string>() ?? string.Empty))), ("open-changed-files", "true"))),
+                "apply_diff" => ("apply-diff", BuildArgs(("patch-text-base64", Convert.ToBase64String(Encoding.UTF8.GetBytes(args?["patch"]?.GetValue<string>() ?? string.Empty))), ("open-changed-files", "true"), ("save-changed-files", "true"))),
                 "find_text" => ("find-text", BuildArgs(("query", args?["query"]?.GetValue<string>()), ("path", args?["path"]?.GetValue<string>()), ("scope", args?["scope"]?.GetValue<string>()), ("match-case", args?["match_case"]?.GetValue<bool>() == true ? "true" : null), ("whole-word", args?["whole_word"]?.GetValue<bool>() == true ? "true" : null))),
                 "read_file" => ("document-slice", BuildArgs(("file", args?["file"]?.GetValue<string>()), ("start-line", args?["start_line"]?.ToString()), ("end-line", args?["end_line"]?.ToString()), ("line", args?["line"]?.ToString()), ("context-before", args?["context_before"]?.ToString()), ("context-after", args?["context_after"]?.ToString()))),
                 "find_references" => ("find-references", BuildArgs(("file", args?["file"]?.GetValue<string>()), ("line", args?["line"]?.ToString()), ("column", args?["column"]?.ToString()))),
                 "peek_definition" => ("peek-definition", BuildArgs(("file", args?["file"]?.GetValue<string>()), ("line", args?["line"]?.ToString()), ("column", args?["column"]?.ToString()))),
                 "file_outline" => ("file-outline", BuildArgs(("file", args?["file"]?.GetValue<string>()))),
                 "build" => ("build", BuildArgs(("configuration", args?["configuration"]?.GetValue<string>()))),
+                "open_solution" => ("open-solution", BuildArgs(("solution", args?["solution"]?.GetValue<string>()))),
                 _ => throw new McpRequestException(id, -32602, $"Unknown MCP tool: {toolName}"),
             };
 
@@ -639,14 +642,14 @@ internal static partial class CliApp
             ["arguments"] = new JsonArray(),
         };
 
-        private static JsonNode GetPrompt(JsonNode? id, JsonObject? p)
+        private static JsonObject GetPrompt(JsonNode? id, JsonObject? p)
         {
             var name = p?["name"]?.GetValue<string>() ?? throw new McpRequestException(id, -32602, "prompts/get missing name.");
             var text = name switch
             {
-                "help" => "Use tools list_instances, bind_solution or bind_instance, then state, find_files, open_file, errors, warnings, search_symbols, quick_info, and apply_diff.",
-                "fix_current_errors" => "Bind to the right solution first, call errors, inspect rows, then use find_files, open_file, quick_info, search_symbols, and apply_diff.",
-                "open_solution_and_wait_ready" => "Outside MCP, run: vs-ide-bridge ensure --solution <path>; then call state until ready.",
+                "help" => "Key tools: bind_solution or bind_instance to connect, open_solution to load a .sln, state to inspect VS state. Navigation: find_files, find_text, open_file, search_symbols, quick_info, read_file, find_references, peek_definition, file_outline. Editing: apply_diff. Diagnostics: errors, warnings, build. Git: git_status, git_diff_unstaged, git_diff_staged, git_log, git_add, git_commit, git_push, git_pull. GitHub: github_issue_search, github_issue_close.",
+                "fix_current_errors" => "Bind to the right solution first, call errors to list problems. Use read_file or find_text to inspect code, quick_info and find_references for context, then apply_diff to fix.",
+                "open_solution_and_wait_ready" => "Call open_solution with the absolute .sln path. Then call state to confirm the solution loaded.",
                 "git_review_before_commit" => "Call git_status, git_diff_unstaged, git_diff_staged, git_log, then git_add and git_commit when ready.",
                 "git_sync_with_remote" => "Call git_fetch, git_status, and git_log first. Then use git_pull when behind or git_push when ahead.",
                 "github_issue_triage" => "Use github_issue_search with state=open, review candidates, then use github_issue_close with issue_number and optional comment.",
@@ -995,10 +998,9 @@ internal static partial class CliApp
 
         private static List<string> GetOptionalPaths(JsonObject? args, string name)
         {
-            var array = args?[name] as JsonArray;
-            return array is null
-                ? new List<string>()
-                : array.OfType<JsonNode>().Select(node => node.GetValue<string>()).Where(path => !string.IsNullOrWhiteSpace(path)).ToList();
+            if (args?[name] is not JsonArray array)
+                return [];
+            return array.OfType<JsonNode>().Select(node => node.GetValue<string>()).Where(path => !string.IsNullOrWhiteSpace(path)).ToList();
         }
 
         private static string JoinGitPaths(IEnumerable<string> paths)
@@ -1233,7 +1235,7 @@ internal static partial class CliApp
             while (true)
             {
                 var buffer = new byte[1];
-                var read = await input.ReadAsync(buffer, 0, 1).ConfigureAwait(false);
+                var read = await input.ReadAsync(buffer).ConfigureAwait(false);
                 if (read == 0)
                 {
                     return null;
@@ -1253,7 +1255,7 @@ internal static partial class CliApp
 
         private static async Task<string> ReadRawJsonMessageAsync(Stream input, byte firstByte)
         {
-            var bytes = new List<byte> { firstByte };
+            List<byte> bytes = [firstByte];
             var depth = 1;
             var inString = false;
             var isEscaped = false;
@@ -1261,7 +1263,7 @@ internal static partial class CliApp
             while (depth > 0)
             {
                 var buffer = new byte[1];
-                var read = await input.ReadAsync(buffer, 0, 1).ConfigureAwait(false);
+                var read = await input.ReadAsync(buffer).ConfigureAwait(false);
                 if (read == 0)
                 {
                     throw new McpRequestException(null, -32600, "Unexpected EOF while reading raw JSON MCP payload.");
@@ -1307,14 +1309,14 @@ internal static partial class CliApp
                 }
             }
 
-            return Encoding.UTF8.GetString(bytes.ToArray());
+            return Encoding.UTF8.GetString([.. bytes]);
         }
 
         private static async Task<string> ReadHeaderAsync(Stream input, byte firstByte)
         {
-            var bytes = new List<byte> { firstByte };
+            List<byte> bytes = [firstByte];
             var lastFour = new Queue<byte>(4);
-            var firstBytes = new List<byte>(); // log first 64 bytes for diagnostics
+            List<byte> firstBytes = []; // log first 64 bytes for diagnostics
             firstBytes.Add(firstByte);
             lastFour.Enqueue(firstByte);
             while (true)
@@ -1322,22 +1324,22 @@ internal static partial class CliApp
                 if (lastFour.Count == 4 && lastFour.SequenceEqual(new byte[] { (byte)'\r', (byte)'\n', (byte)'\r', (byte)'\n' }))
                 {
                     McpTrace($"ReadHeaderAsync: got CRLF header after {bytes.Count} bytes");
-                    return Encoding.ASCII.GetString(bytes.ToArray());
+                    return Encoding.ASCII.GetString([.. bytes]);
                 }
 
                 var arr = lastFour.ToArray();
-                if (arr.Length >= 2 && arr[arr.Length - 1] == (byte)'\n' && arr[arr.Length - 2] == (byte)'\n'
-                    && !(arr.Length >= 4 && arr[arr.Length - 4] == (byte)'\r'))
+                if (arr.Length >= 2 && arr[^1] == (byte)'\n' && arr[^2] == (byte)'\n'
+                    && !(arr.Length >= 4 && arr[^4] == (byte)'\r'))
                 {
                     McpTrace($"ReadHeaderAsync: got LF-only header after {bytes.Count} bytes");
-                    return Encoding.ASCII.GetString(bytes.ToArray());
+                    return Encoding.ASCII.GetString([.. bytes]);
                 }
 
                 var b = new byte[1];
-                var read = await input.ReadAsync(b, 0, 1).ConfigureAwait(false);
+                var read = await input.ReadAsync(b).ConfigureAwait(false);
                 if (read == 0)
                 {
-                    McpTrace($"ReadHeaderAsync: EOF after {bytes.Count} bytes. First bytes: {BitConverter.ToString(firstBytes.ToArray())}");
+                    McpTrace($"ReadHeaderAsync: EOF after {bytes.Count} bytes. First bytes: {BitConverter.ToString([.. firstBytes])}");
                     return string.Empty;
                 }
 
@@ -1356,15 +1358,15 @@ internal static partial class CliApp
             var bytes = Encoding.UTF8.GetBytes(response.ToJsonString());
             if (wireFormat == McpWireFormat.RawJson)
             {
-                await output.WriteAsync(bytes, 0, bytes.Length).ConfigureAwait(false);
-                await output.WriteAsync(RawJsonTerminator, 0, RawJsonTerminator.Length).ConfigureAwait(false);
+                await output.WriteAsync(bytes).ConfigureAwait(false);
+                await output.WriteAsync(RawJsonTerminator).ConfigureAwait(false);
                 await output.FlushAsync().ConfigureAwait(false);
                 return;
             }
 
             var header = Encoding.ASCII.GetBytes($"Content-Length: {bytes.Length}\r\n\r\n");
-            await output.WriteAsync(header, 0, header.Length).ConfigureAwait(false);
-            await output.WriteAsync(bytes, 0, bytes.Length).ConfigureAwait(false);
+            await output.WriteAsync(header).ConfigureAwait(false);
+            await output.WriteAsync(bytes).ConfigureAwait(false);
             await output.FlushAsync().ConfigureAwait(false);
         }
 

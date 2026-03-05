@@ -559,7 +559,8 @@ internal sealed class PatchService
 
     private static List<FilePatch> ParseUnifiedDiff(string patchText)
     {
-        var lines = patchText.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        var normalized = patchText.Replace("\r\n", "\n").Replace('\r', '\n').TrimEnd('\n');
+        var lines = normalized.Split('\n');
         var patches = new List<FilePatch>();
         FilePatch? currentFile = null;
         var lineIndex = 0;
