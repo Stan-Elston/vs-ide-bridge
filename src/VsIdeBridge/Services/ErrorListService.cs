@@ -61,6 +61,10 @@ internal sealed class ErrorListService(ReadinessService readinessService)
     private static readonly Regex StructuredOutputPattern = new(
         @"^(?<project>.+?)\s*>\s*(?<file>[A-Za-z]:\\.*?|\S.*?)(?:\((?<line>\d+)(?:,(?<column>\d+))?\))?\s*:\s*(?<severity>warning|error)\s+(?<code>[A-Za-z]+[A-Za-z0-9-]*)\s*:\s*(?<message>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex StringLiteralPattern = new("\"([^\"\\r\\n]{4,})\"", RegexOptions.Compiled);
+    private static readonly Regex NumberLiteralPattern = new(@"(?<![A-Za-z0-9_\.])(?<value>-?\d+(?:\.\d+)?)\b", RegexOptions.Compiled);
+    private static readonly Regex SuspiciousRoundDownPattern = new(@"Math\s*\.\s*(?:Floor|Truncate)\s*\(", RegexOptions.Compiled);
+    private static readonly Regex SuppressionIntentPattern = new(@"\b(?:fix|silence|suppress|workaround|appease)\b.{0,30}\b(?:error|warning|lint|analyzer)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private readonly ReadinessService _readinessService = readinessService;
 
@@ -104,6 +108,13 @@ internal sealed class ErrorListService(ReadinessService readinessService)
                 rows = ReadBuildOutputRows(context.Dte);
             }
         }
+
+        var bestPracticeRows = AnalyzeBestPracticeFindings(rows);
+        if (bestPracticeRows.Count > 0)
+        {
+            rows = rows.Concat(bestPracticeRows).ToArray();
+        }
+
         var filteredRows = ApplyQuery(rows, query).ToArray();
         var severityCounts = CreateSeverityCounts();
         foreach (var row in filteredRows)
@@ -129,6 +140,137 @@ internal sealed class ErrorListService(ReadinessService readinessService)
             ["rows"] = new JArray(filteredRows),
             ["groups"] = BuildGroups(filteredRows, query?.GroupBy),
         };
+    }
+
+    private static IReadOnlyList<JObject> AnalyzeBestPracticeFindings(IReadOnlyList<JObject> rows)
+    {
+        var findings = new List<JObject>();
+        var files = rows
+            .Select(row => row["file"]?.ToString())
+            .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(64)
+            .ToArray();
+
+        foreach (var file in files)
+        {
+            var content = SafeReadFile(file!);
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                continue;
+            }
+
+            findings.AddRange(FindRepeatedStringLiterals(file!, content));
+            findings.AddRange(FindMagicNumbers(file!, content));
+            findings.AddRange(FindSuspiciousRoundDown(file!, content));
+        }
+
+        return findings;
+    }
+
+    private static string SafeReadFile(string filePath)
+    {
+        try
+        {
+            return File.ReadAllText(filePath);
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static IEnumerable<JObject> FindRepeatedStringLiterals(string file, string content)
+    {
+        var occurrences = StringLiteralPattern.Matches(content)
+            .Cast<Match>()
+            .GroupBy(match => match.Groups[1].Value)
+            .FirstOrDefault(group => group.Count() >= 3);
+
+        if (occurrences is null)
+        {
+            yield break;
+        }
+
+        yield return CreateBestPracticeRow(
+            code: "BP1001",
+            message: $"String literal '{occurrences.Key}' is repeated {occurrences.Count()} times. Extract a constant.",
+            file: file,
+            line: GetLineNumber(content, occurrences.First().Index),
+            symbol: occurrences.Key);
+    }
+
+    private static IEnumerable<JObject> FindMagicNumbers(string file, string content)
+    {
+        var matches = NumberLiteralPattern.Matches(content)
+            .Cast<Match>()
+            .Select(match => new { Match = match, Value = match.Groups["value"].Value })
+            .Where(item => item.Value is not "0" and not "1" and not "-1")
+            .GroupBy(item => item.Value)
+            .FirstOrDefault(group => group.Count() >= 4);
+
+        if (matches is null)
+        {
+            yield break;
+        }
+
+        yield return CreateBestPracticeRow(
+            code: "BP1002",
+            message: $"Numeric literal '{matches.Key}' appears {matches.Count()} times. Replace magic numbers with named constants.",
+            file: file,
+            line: GetLineNumber(content, matches.First().Match.Index),
+            symbol: matches.Key);
+    }
+
+    private static IEnumerable<JObject> FindSuspiciousRoundDown(string file, string content)
+    {
+        var lines = content.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (SuspiciousRoundDownPattern.IsMatch(line) && SuppressionIntentPattern.IsMatch(line))
+            {
+                yield return CreateBestPracticeRow(
+                    code: "BP1003",
+                    message: "Possible error suppression via rounding down detected. Investigate root cause instead of forcing Math.Floor/Math.Truncate.",
+                    file: file,
+                    line: i + 1,
+                    symbol: "Math.Floor");
+                yield break;
+            }
+        }
+    }
+
+    private static JObject CreateBestPracticeRow(string code, string message, string file, int line, string symbol)
+    {
+        return new JObject
+        {
+            ["severity"] = "Error",
+            ["code"] = code,
+            ["codeFamily"] = "best-practice",
+            ["tool"] = "best-practice",
+            ["message"] = message,
+            ["project"] = string.Empty,
+            ["file"] = file,
+            ["line"] = line,
+            ["column"] = 1,
+            ["symbols"] = new JArray(symbol),
+            ["source"] = "best-practice",
+        };
+    }
+
+    private static int GetLineNumber(string content, int index)
+    {
+        var line = 1;
+        for (var i = 0; i < index && i < content.Length; i++)
+        {
+            if (content[i] == '\n')
+            {
+                line++;
+            }
+        }
+
+        return line;
     }
 
     private static Dictionary<string, int> CreateSeverityCounts()
