@@ -72,6 +72,31 @@ This is enough to produce:
 - `src\VsIdeBridge\bin\Debug\net472\VsIdeBridge.dll`
 - `src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe`
 
+### Installer EXE (Preferred)
+
+Build the installer executable:
+
+```bat
+dotnet build src\VsIdeBridgeInstaller\VsIdeBridgeInstaller.csproj -c Release
+```
+
+Run from an elevated PowerShell terminal:
+
+```powershell
+src\VsIdeBridgeInstaller\bin\Release\net8.0\vs-ide-bridge-installer.exe install --configuration Release
+```
+
+Uninstall:
+
+```powershell
+src\VsIdeBridgeInstaller\bin\Release\net8.0\vs-ide-bridge-installer.exe uninstall
+```
+
+Optional service registration is supported only when you provide a real service host binary:
+
+```powershell
+src\VsIdeBridgeInstaller\bin\Release\net8.0\vs-ide-bridge-installer.exe install --configuration Release --install-service --service-exe "C:\Program Files\VsIdeBridge\VsIdeBridgeService.exe"
+```
 ### Install Or Update The Extension
 
 **Prerequisites — before running the installer:**
@@ -781,4 +806,7 @@ output/                   Local smoke-test artifacts (git-ignored)
 - Symbol commands rely on VS language services, not bridge-side parsing.
 - `execute-command` is the escape hatch for native VS commands that have no first-class bridge equivalent.
 - Simple pipe names are the preferred public contract. The legacy `Tools.Ide*` names remain supported for compatibility.
+
+
+
 

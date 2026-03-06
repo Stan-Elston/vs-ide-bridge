@@ -2415,38 +2415,65 @@ internal sealed class PipeDiscovery
 
     private static async Task<IReadOnlyList<PipeDiscovery>> ListJsonAsync()
     {
-        var temp = Environment.GetEnvironmentVariable("TEMP")
-            ?? Environment.GetEnvironmentVariable("TMP")
-            ?? Path.GetTempPath();
-        var directory = Path.Combine(temp, "vs-ide-bridge", "pipes");
-        if (!Directory.Exists(directory))
-        {
-            return [];
-        }
-
-        var files = Directory.GetFiles(directory, "bridge-*.json")
-            .Select(path => new FileInfo(path))
-            .OrderByDescending(file => file.LastWriteTimeUtc)
-            .ThenByDescending(file => ParsePid(file.Name))
-            .ToArray();
-        if (files.Length == 0)
-        {
-            return [];
-        }
-
-        var instances = new List<PipeDiscovery>();
-        foreach (var file in files)
-        {
-            var instance = await TryLoadAsync(file.FullName).ConfigureAwait(false);
-            if (instance is null)
+        var tempCandidates = new[]
             {
-                continue;
+                Environment.GetEnvironmentVariable("TEMP"),
+                Environment.GetEnvironmentVariable("TMP"),
+                Path.GetTempPath(),
             }
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => path!)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
 
-            instances.Add(instance);
+        foreach (var temp in tempCandidates)
+        {
+            var directory = Path.Combine(temp, "vs-ide-bridge", "pipes");
+            try
+            {
+                if (!Directory.Exists(directory))
+                {
+                    continue;
+                }
+
+                var files = Directory.GetFiles(directory, "bridge-*.json")
+                    .Select(path => new FileInfo(path))
+                    .OrderByDescending(file => file.LastWriteTimeUtc)
+                    .ThenByDescending(file => ParsePid(file.Name))
+                    .ToArray();
+                if (files.Length == 0)
+                {
+                    continue;
+                }
+
+                var instances = new List<PipeDiscovery>();
+                foreach (var file in files)
+                {
+                    var instance = await TryLoadAsync(file.FullName).ConfigureAwait(false);
+                    if (instance is null)
+                    {
+                        continue;
+                    }
+
+                    instances.Add(instance);
+                }
+
+                if (instances.Count > 0)
+                {
+                    return instances;
+                }
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Some environments expose TEMP/TMP directories owned by another account.
+                // Ignore inaccessible roots and continue with other candidates.
+            }
+            catch (IOException)
+            {
+                // Ignore transient file-system failures and continue with other candidates.
+            }
         }
 
-        return instances;
+        return [];
     }
 
     public static IEnumerable<PipeDiscovery> Filter(IEnumerable<PipeDiscovery> instances, BridgeInstanceSelector selector)
@@ -3393,3 +3420,4 @@ internal sealed class CliException : Exception
     }
 
 }
+
