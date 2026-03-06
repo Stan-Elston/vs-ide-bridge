@@ -27,14 +27,41 @@ public sealed class VsIdeBridgePackage : AsyncPackage
         CancellationToken cancellationToken,
         IProgress<ServiceProgressData> progress)
     {
-        _runtime = await IdeBridgeRuntime.CreateAsync(this).ConfigureAwait(false);
-        await CommandRegistrar.InitializeAsync(this, _runtime).ConfigureAwait(false);
-        _runtime.BridgeWatchdogService.Start();
+        IdeBridgeRuntime runtime;
+        try
+        {
+            runtime = await IdeBridgeRuntime.CreateAsync(this).ConfigureAwait(false);
+            _runtime = runtime;
+        }
+        catch (Exception ex)
+        {
+            ActivityLog.LogError(nameof(VsIdeBridgePackage), $"Runtime initialization failed: {ex}");
+            return;
+        }
+
+        try
+        {
+            await CommandRegistrar.InitializeAsync(this, runtime).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            ActivityLog.LogError(nameof(VsIdeBridgePackage), $"Command registration failed: {ex}");
+            return;
+        }
+
+        try
+        {
+            runtime.BridgeWatchdogService.Start();
+        }
+        catch (Exception ex)
+        {
+            ActivityLog.LogWarning(nameof(VsIdeBridgePackage), $"Bridge watchdog failed to start: {ex.Message}");
+        }
 
         // Start named pipe server (best-effort; failure does not break DTE commands)
         try
         {
-            _pipeServer = new PipeServerService(this, _runtime);
+            _pipeServer = new PipeServerService(this, runtime);
             _pipeServer.Start();
         }
         catch (Exception ex)

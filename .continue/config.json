@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/continuedev/continue/main/extensions/vscode/config_schema.json",
+  "mcpServers": {
+    "vs-ide-bridge": {
+      "command": "src\\VsIdeBridgeCli\\bin\\Debug\\net8.0\\vs-ide-bridge.exe",
+      "args": [
+        "mcp-server",
+        "--instance",
+        "vs18-38688-20260304T031139Z"
+      ]
+    }
+  }
+}

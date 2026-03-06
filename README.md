@@ -164,10 +164,79 @@ Optional parameters:
 2. Build with `scripts\build.bat`.
 3. If that fails in a non-bridge native project, use the managed-only fallback build above.
 4. Install `src\VsIdeBridge\bin\Debug\net472\VsIdeBridge.vsix`.
-5. Run `src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe ensure --solution "C:\path\to\Your.sln"`.
-6. Run `src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe current`.
-7. Run `src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe help` if you need a refresher.
-8. Send commands with `src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe`.
+5. Start/reuse a bridged instance with `src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe ensure --solution "C:\path\to\Your.sln"`.
+6. For agent workflows, prefer MCP tools first (`mcp-server` facade) and use CLI commands as fallback.
+7. Verify targeting with `src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe current`.
+8. Use `src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe help` for CLI verb reference.
+
+## MCP Command Catalog
+
+The MCP facade is the preferred interface for agent workflows. Use `tool_help` for the authoritative live schema and examples. Current MCP commands:
+
+```text
+apply_diff
+bind_instance
+bind_solution
+bridge_health
+build
+build_configurations
+conda_install
+conda_remove
+count_references
+debug_exceptions
+debug_locals
+debug_modules
+debug_stack
+debug_threads
+debug_watch
+diagnostics_snapshot
+errors
+file_outline
+find_files
+find_references
+find_text
+git_add
+git_branch_list
+git_checkout
+git_commit
+git_commit_amend
+git_create_branch
+git_current_branch
+git_diff_staged
+git_diff_unstaged
+git_fetch
+git_log
+git_pull
+git_push
+git_remote_list
+git_reset
+git_restore
+git_show
+git_stash_list
+git_stash_pop
+git_stash_push
+git_status
+git_tag_list
+github_issue_close
+github_issue_search
+help
+list_instances
+list_tabs
+nuget_add_package
+nuget_remove_package
+nuget_restore
+open_file
+open_solution
+peek_definition
+quick_info
+read_file
+ready
+search_symbols
+set_build_configuration
+state
+tool_help
+warnings
+```
 
 ## Command Surface
 
@@ -712,3 +781,4 @@ output/                   Local smoke-test artifacts (git-ignored)
 - Symbol commands rely on VS language services, not bridge-side parsing.
 - `execute-command` is the escape hatch for native VS commands that have no first-class bridge equivalent.
 - Simple pipe names are the preferred public contract. The legacy `Tools.Ide*` names remain supported for compatibility.
+

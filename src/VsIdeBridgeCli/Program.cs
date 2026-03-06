@@ -44,6 +44,23 @@ internal static partial class CliApp
         WriteIndented = true,
     };
 
+    private static class EnvVars
+    {
+        public const string SystemRoot = "SystemRoot";
+        public const string WindowsDirectory = "windir";
+        public const string Temp = "TEMP";
+        public const string TempAlternative = "TMP";
+        public const string UserProfile = "USERPROFILE";
+        public const string HomeDrive = "HOMEDRIVE";
+        public const string HomePath = "HOMEPATH";
+        public const string AppData = "APPDATA";
+        public const string LocalAppData = "LOCALAPPDATA";
+        public const string ProgramData = "PROGRAMDATA";
+        public const string DiscoveryMode = "VS_IDE_BRIDGE_DISCOVERY_MODE";
+        public const string EmitDiscoveryJson = "VS_IDE_BRIDGE_EMIT_DISCOVERY_JSON";
+        public const string EmitMemoryDiscovery = "VS_IDE_BRIDGE_EMIT_MEMORY_DISCOVERY";
+    }
+
     private static class Args
     {
         public const string ActivateWindow = "activate-window";
@@ -930,13 +947,128 @@ internal static partial class CliApp
             WorkingDirectory = Path.GetDirectoryName(solutionPath) ?? Environment.CurrentDirectory,
             UseShellExecute = false,
         };
-        startInfo.EnvironmentVariables["VS_IDE_BRIDGE_DISCOVERY_MODE"] = DiscoveryModeToOption(discoveryMode);
-        startInfo.EnvironmentVariables["VS_IDE_BRIDGE_EMIT_DISCOVERY_JSON"] = emitDiscoveryJson ? "true" : "false";
-        startInfo.EnvironmentVariables["VS_IDE_BRIDGE_EMIT_MEMORY_DISCOVERY"] =
-            discoveryMode == DiscoveryMode.JsonOnly ? "false" : "true";
+        ConfigureVisualStudioStartupEnvironment(startInfo, discoveryMode, emitDiscoveryJson);
 
         _ = Process.Start(startInfo)
             ?? throw new CliException($"Failed to start Visual Studio for '{solutionPath}'.");
+    }
+
+    private static void ConfigureVisualStudioStartupEnvironment(ProcessStartInfo startInfo, DiscoveryMode discoveryMode, bool emitDiscoveryJson)
+    {
+        EnsureWindowsShellEnvironment(startInfo);
+
+        startInfo.EnvironmentVariables[EnvVars.DiscoveryMode] = DiscoveryModeToOption(discoveryMode);
+        startInfo.EnvironmentVariables[EnvVars.EmitDiscoveryJson] = emitDiscoveryJson ? "true" : "false";
+        startInfo.EnvironmentVariables[EnvVars.EmitMemoryDiscovery] =
+            discoveryMode == DiscoveryMode.JsonOnly ? "false" : "true";
+    }
+
+    private static void EnsureWindowsShellEnvironment(ProcessStartInfo startInfo)
+    {
+        var windowsDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        SetEnvironmentPath(startInfo, EnvVars.SystemRoot, windowsDirectory);
+        SetEnvironmentPath(startInfo, EnvVars.WindowsDirectory, windowsDirectory);
+
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        SetEnvironmentPath(startInfo, EnvVars.UserProfile, userProfile);
+        SetHomeDriveAndPath(startInfo, userProfile);
+        SetEnvironmentPath(startInfo, EnvVars.AppData, Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData));
+        SetEnvironmentPath(startInfo, EnvVars.LocalAppData, Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+        SetEnvironmentPath(startInfo, EnvVars.ProgramData, Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData));
+
+        var tempDirectory = NormalizeEnvironmentPath(Path.GetTempPath());
+        if (string.IsNullOrWhiteSpace(tempDirectory))
+        {
+            return;
+        }
+
+        startInfo.EnvironmentVariables[EnvVars.Temp] = tempDirectory;
+        startInfo.EnvironmentVariables[EnvVars.TempAlternative] = tempDirectory;
+    }
+
+    private static void SetEnvironmentPath(ProcessStartInfo startInfo, string variableName, string? value)
+    {
+        var normalized = NormalizeEnvironmentPath(value);
+        if (!string.IsNullOrWhiteSpace(normalized))
+        {
+            startInfo.EnvironmentVariables[variableName] = normalized;
+        }
+    }
+
+    private static void SetHomeDriveAndPath(ProcessStartInfo startInfo, string userProfile)
+    {
+        var normalizedUserProfile = NormalizeEnvironmentPath(userProfile);
+        if (string.IsNullOrWhiteSpace(normalizedUserProfile))
+        {
+            return;
+        }
+
+        if (normalizedUserProfile.Length < 3 || normalizedUserProfile[1] != ':' || normalizedUserProfile[2] != '\\')
+        {
+            return;
+        }
+
+        startInfo.EnvironmentVariables[EnvVars.HomeDrive] = normalizedUserProfile[..2].ToUpperInvariant();
+        startInfo.EnvironmentVariables[EnvVars.HomePath] = normalizedUserProfile[2..];
+    }
+
+    private static string NormalizeEnvironmentPath(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var candidate = value.Trim().Trim('"');
+        var mntPathConverted = TryConvertMntPathToWindows(candidate);
+        if (!string.IsNullOrWhiteSpace(mntPathConverted))
+        {
+            candidate = mntPathConverted;
+        }
+
+        candidate = candidate.Replace('/', '\\');
+        if (!Path.IsPathRooted(candidate))
+        {
+            return candidate;
+        }
+
+        try
+        {
+            return Path.GetFullPath(candidate);
+        }
+        catch
+        {
+            return candidate;
+        }
+    }
+
+    private static string? TryConvertMntPathToWindows(string path)
+    {
+        if (!path.StartsWith("/mnt/", StringComparison.OrdinalIgnoreCase) || path.Length < 6)
+        {
+            return null;
+        }
+
+        var driveLetter = path[5];
+        if (!char.IsLetter(driveLetter))
+        {
+            return null;
+        }
+
+        if (path.Length > 6 && path[6] != '/' && path[6] != '\\')
+        {
+            return null;
+        }
+
+        var remainder = path.Length <= 7
+            ? string.Empty
+            : path[7..].Replace('/', '\\');
+        if (string.IsNullOrWhiteSpace(remainder))
+        {
+            return $"{char.ToUpperInvariant(driveLetter)}:\\";
+        }
+
+        return $"{char.ToUpperInvariant(driveLetter)}:\\{remainder}";
     }
 
     private static DiscoveryMode ResolveDiscoveryMode(CliOptions options)

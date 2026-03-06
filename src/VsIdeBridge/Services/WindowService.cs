@@ -88,14 +88,19 @@ internal sealed class WindowService
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
-        var documentPath = window.Document?.FullName;
+        var caption = GetWindowCaptionSafe(window);
+        var kind = GetWindowKindSafe(window);
+        var objectKind = GetWindowObjectKindSafe(window);
+        var windowType = GetWindowTypeSafe(window);
+        var visible = GetWindowVisibleSafe(window);
+        var documentPath = GetWindowDocumentPathSafe(window);
         return new JObject
         {
-            ["caption"] = window.Caption ?? string.Empty,
-            ["kind"] = window.Kind ?? string.Empty,
-            ["objectKind"] = window.ObjectKind ?? string.Empty,
-            ["type"] = window.Type.ToString(),
-            ["visible"] = window.Visible,
+            ["caption"] = caption,
+            ["kind"] = kind,
+            ["objectKind"] = objectKind,
+            ["type"] = windowType,
+            ["visible"] = visible,
             ["documentPath"] = string.IsNullOrWhiteSpace(documentPath)
                 ? string.Empty
                 : PathNormalization.NormalizeFilePath(documentPath),
@@ -162,10 +167,10 @@ internal sealed class WindowService
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
-        var caption = window.Caption;
-        var objectKind = window.ObjectKind;
-        var kind = window.Kind;
-        var documentPath = window.Document?.FullName;
+        var caption = GetWindowCaptionSafe(window);
+        var objectKind = GetWindowObjectKindSafe(window);
+        var kind = GetWindowKindSafe(window);
+        var documentPath = GetWindowDocumentPathSafe(window);
         return string.Equals(caption, query, StringComparison.OrdinalIgnoreCase) ||
                string.Equals(objectKind, query, StringComparison.OrdinalIgnoreCase) ||
                string.Equals(kind, query, StringComparison.OrdinalIgnoreCase) ||
@@ -176,10 +181,10 @@ internal sealed class WindowService
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
-        var caption = window.Caption;
-        var kind = window.Kind;
-        var objectKind = window.ObjectKind;
-        var documentPath = window.Document?.FullName;
+        var caption = GetWindowCaptionSafe(window);
+        var kind = GetWindowKindSafe(window);
+        var objectKind = GetWindowObjectKindSafe(window);
+        var documentPath = GetWindowDocumentPathSafe(window);
         return Contains(caption, query) ||
                Contains(kind, query) ||
                Contains(objectKind, query) ||
@@ -205,6 +210,84 @@ internal sealed class WindowService
     private static string GetWindowCaption(Window window)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
-        return window.Caption ?? string.Empty;
+        return GetWindowCaptionSafe(window);
+    }
+
+    private static string GetWindowCaptionSafe(Window window)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            return window.Caption ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static string GetWindowKindSafe(Window window)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            return window.Kind ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static string GetWindowObjectKindSafe(Window window)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            return window.ObjectKind ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static string GetWindowDocumentPathSafe(Window window)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            return window.Document?.FullName ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static string GetWindowTypeSafe(Window window)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            return window.Type.ToString();
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static bool GetWindowVisibleSafe(Window window)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            return window.Visible;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

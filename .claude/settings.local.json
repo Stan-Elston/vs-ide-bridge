@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"C:/Users/elsto/source/repos/vs-ide-bridge/src/VsIdeBridgeCli/bin/Debug/net8.0/vs-ide-bridge.exe\" ensure --solution \"C:/Users/elsto/source/repos/RenegadeRiff86/SuperSlicer/build/Slic3r.sln\")",
+      "Bash(\"C:/Users/elsto/source/repos/vs-ide-bridge/src/VsIdeBridgeCli/bin/Debug/net8.0/vs-ide-bridge.exe\" current --format keyvalue)",
+      "Bash(INST=\"vs18-26080-20260303T195937Z\")",
+      "Bash(CLI=\"C:/Users/elsto/source/repos/vs-ide-bridge/src/VsIdeBridgeCli/bin/Debug/net8.0/vs-ide-bridge.exe\")",
+      "Bash(__NEW_LINE_404b51e5d3c6aebe__ \"$CLI\" state --instance \"$INST\" --format summary)",
+      "Bash(__NEW_LINE_3be807f12f369210__ \"$CLI\" file-outline --instance \"$INST\" --file \"C:/Users/elsto/source/repos/RenegadeRiff86/SuperSlicer/src/admesh/connect.cpp\" --format json)",
+      "Bash(__NEW_LINE_d118d4bcb4c4e14a__ \"$CLI\" file-symbols --instance \"$INST\" --file \"C:/Users/elsto/source/repos/RenegadeRiff86/SuperSlicer/src/admesh/connect.cpp\" --format json)",
+      "Bash(__NEW_LINE_c494082c6f1230ba__ \"$CLI\" list-tabs --instance \"$INST\" --format json)",
+      "Bash(__NEW_LINE_b10a842375748076__ \"$CLI\" open-document --instance \"$INST\" --file \"C:/Users/elsto/source/repos/RenegadeRiff86/SuperSlicer/src/admesh/connect.cpp\" --line 432 --format summary)"
+    ]
+  }
+}

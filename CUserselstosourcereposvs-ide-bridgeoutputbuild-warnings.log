@@ -1,0 +1,106 @@
+MSBuild version 18.3.0-release-26070-10+3972042b7 for .NET Framework
+Build started 3/3/2026 1:16:12 PM.
+
+     1>Project "C:\Users\elsto\source\repos\vs-ide-bridge\VsIdeBridge.sln" on node 1 (Restore target(s)).
+     1>ValidateSolutionConfiguration:
+         Building solution configuration "Debug|Any CPU".
+       _GetAllRestoreProjectPathItems:
+         Determining projects to restore...
+       Restore:
+         X.509 certificate chain validation will use the default trust store selected by .NET for code signing.
+         X.509 certificate chain validation will use the default trust store selected by .NET for timestamping.
+         Assets file has not changed. Skipping assets file writing. Path: C:\Users\elsto\source\repos\vs-ide-bridge\src\VsIdeBridgeCli\obj\project.assets.json
+         Assets file has not changed. Skipping assets file writing. Path: C:\Users\elsto\source\repos\vs-ide-bridge\src\VsIdeBridge\obj\project.assets.json
+         Restored C:\Users\elsto\source\repos\vs-ide-bridge\src\VsIdeBridgeCli\VsIdeBridgeCli.csproj (in 50 ms).
+         Restored C:\Users\elsto\source\repos\vs-ide-bridge\src\VsIdeBridge\VsIdeBridge.csproj (in 53 ms).
+         
+         NuGet Config files used:
+             C:\Users\elsto\source\repos\vs-ide-bridge\NuGet.Config
+             C:\Users\elsto\AppData\Roaming\NuGet\NuGet.Config
+             C:\Program Files (x86)\NuGet\Config\Microsoft.VisualStudio.FallbackLocation.config
+             C:\Program Files (x86)\NuGet\Config\Microsoft.VisualStudio.Offline.config
+         
+         Feeds used:
+             https://api.nuget.org/v3/index.json
+             C:\Program Files (x86)\Microsoft SDKs\NuGetPackages\
+         All projects are up-to-date for restore.
+     1>Done Building Project "C:\Users\elsto\source\repos\vs-ide-bridge\VsIdeBridge.sln" (Restore target(s)).
+   1:2>Project "C:\Users\elsto\source\repos\vs-ide-bridge\VsIdeBridge.sln" on node 1 (default targets).
+     1>ValidateSolutionConfiguration:
+         Building solution configuration "Debug|Any CPU".
+   1:2>Project "C:\Users\elsto\source\repos\vs-ide-bridge\VsIdeBridge.sln" (1:2) is building "C:\Users\elsto\source\repos\vs-ide-bridge\src\IdeBridgeJsonProbe\IdeBridgeJsonProbe.vcxproj" (2:6) on node 2 (default targets).
+     2>PrepareForBuild:
+         Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
+       InitializeBuildStatus:
+         Creating "C:\Users\elsto\source\repos\vs-ide-bridge\src\IdeBridgeJsonProbe\obj\x64\Debug\IdeBridg.E43C296A.tlog\unsuccessfulbuild" because "AlwaysCreate" was specified.
+         Touching "C:\Users\elsto\source\repos\vs-ide-bridge\src\IdeBridgeJsonProbe\obj\x64\Debug\IdeBridg.E43C296A.tlog\unsuccessfulbuild".
+       ClCompile:
+         All outputs are up-to-date.
+       Link:
+         All outputs are up-to-date.
+         IdeBridgeJsonProbe.vcxproj -> C:\Users\elsto\source\repos\vs-ide-bridge\src\IdeBridgeJsonProbe\bin\x64\Debug\IdeBridgeJsonProbe.exe
+       FinalizeBuildStatus:
+         Deleting file "C:\Users\elsto\source\repos\vs-ide-bridge\src\IdeBridgeJsonProbe\obj\x64\Debug\IdeBridg.E43C296A.tlog\unsuccessfulbuild".
+         Touching "C:\Users\elsto\source\repos\vs-ide-bridge\src\IdeBridgeJsonProbe\obj\x64\Debug\IdeBridg.E43C296A.tlog\IdeBridgeJsonProbe.lastbuildstate".
+     2>Done Building Project "C:\Users\elsto\source\repos\vs-ide-bridge\src\IdeBridgeJsonProbe\IdeBridgeJsonProbe.vcxproj" (default targets).
+   1:2>Project "C:\Users\elsto\source\repos\vs-ide-bridge\VsIdeBridge.sln" (1:2) is building "C:\Users\elsto\source\repos\vs-ide-bridge\src\VsIdeBridgeCli\VsIdeBridgeCli.csproj" (3:6) on node 3 (default targets).
+     3>GenerateTargetFrameworkMonikerAttribute:
+       Skipping target "GenerateTargetFrameworkMonikerAttribute" because all output files are up-to-date with respect to the input files.
+       CoreGenerateAssemblyInfo:
+       Skipping target "CoreGenerateAssemblyInfo" because all output files are up-to-date with respect to the input files.
+       _GenerateSourceLinkFile:
+         Source Link file 'obj\Debug\net8.0\VsIdeBridgeCli.sourcelink.json' is up-to-date.
+       CoreCompile:
+       Skipping target "CoreCompile" because all output files are up-to-date with respect to the input files.
+       _CreateAppHost:
+       Skipping target "_CreateAppHost" because all output files are up-to-date with respect to the input files.
+       _CopyOutOfDateSourceItemsToOutputDirectory:
+       Skipping target "_CopyOutOfDateSourceItemsToOutputDirectory" because all output files are up-to-date with respect to the input files.
+       GenerateBuildDependencyFile:
+       Skipping target "GenerateBuildDependencyFile" because all output files are up-to-date with respect to the input files.
+       GenerateBuildRuntimeConfigurationFiles:
+       Skipping target "GenerateBuildRuntimeConfigurationFiles" because all output files are up-to-date with respect to the input files.
+       CopyFilesToOutputDirectory:
+         VsIdeBridgeCli -> C:\Users\elsto\source\repos\vs-ide-bridge\src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.dll
+     3>Done Building Project "C:\Users\elsto\source\repos\vs-ide-bridge\src\VsIdeBridgeCli\VsIdeBridgeCli.csproj" (default targets).
+   1:2>Project "C:\Users\elsto\source\repos\vs-ide-bridge\VsIdeBridge.sln" (1:2) is building "C:\Users\elsto\source\repos\vs-ide-bridge\src\VsIdeBridge\VsIdeBridge.csproj" (4:6) on node 1 (default targets).
+     4>CoreResGen:
+         No resources are out of date with respect to their source files. Skipping resource generation.
+       VSCTCompile:
+         No out of date dependencies, skipping execution.
+       CreateMenuPkgDef:
+       Skipping target "CreateMenuPkgDef" because it has no outputs.
+       CheckCTOFileHasChanged:
+       Skipping target "CheckCTOFileHasChanged" because all output files are up-to-date with respect to the input files.
+       GenerateTargetFrameworkMonikerAttribute:
+       Skipping target "GenerateTargetFrameworkMonikerAttribute" because all output files are up-to-date with respect to the input files.
+       CoreGenerateAssemblyInfo:
+       Skipping target "CoreGenerateAssemblyInfo" because all output files are up-to-date with respect to the input files.
+       _GenerateSourceLinkFile:
+         Source Link file 'obj\Debug\net472\VsIdeBridge.sourcelink.json' is up-to-date.
+       CoreCompile:
+       Skipping target "CoreCompile" because all output files are up-to-date with respect to the input files.
+       CopyFilesToOutputDirectory:
+         VsIdeBridge -> C:\Users\elsto\source\repos\vs-ide-bridge\src\VsIdeBridge\bin\Debug\net472\VsIdeBridge.dll
+       GeneratePkgDef:
+         Creating intermediate PkgDef file.
+         VSSDK1033: Skipping generation of PkgDef because all files are up to date.
+       CreateVsixContainer:
+         Creating VSIX Container...
+         C:\Users\elsto\.nuget\packages\microsoft.vssdk.buildtools\18.4.33\tools\VSSDK\bin\VsixUtil.exe package -sourceManifest "obj\Debug\net472\extension.vsixmanifest" -outputPath "bin\Debug\net472\VsIdeBridge.vsix" -files "obj\Debug\net472\\files.json" -compressionLevel "NotCompressed" -is64BitBuild 
+         VsIdeBridge -> C:\Users\elsto\source\repos\vs-ide-bridge\src\VsIdeBridge\bin\Debug\net472\VsIdeBridge.vsix
+       VsixCompatibilityAnalyzer:
+         Executing CompatibilityAnalyzer..
+       CopyVsixManifestFile:
+         Copying file from "C:\Users\elsto\source\repos\vs-ide-bridge\src\VsIdeBridge\obj\Debug\net472\extension.vsixmanifest" to "C:\Users\elsto\source\repos\vs-ide-bridge\src\VsIdeBridge\bin\Debug\net472\extension.vsixmanifest".
+         VsIdeBridge -> C:\Users\elsto\source\repos\vs-ide-bridge\src\VsIdeBridge\bin\Debug\net472\extension.vsixmanifest
+       CreateMenuPkgDef:
+       Skipping target "CreateMenuPkgDef" because it has no outputs.
+     4>Done Building Project "C:\Users\elsto\source\repos\vs-ide-bridge\src\VsIdeBridge\VsIdeBridge.csproj" (default targets).
+     1>Done Building Project "C:\Users\elsto\source\repos\vs-ide-bridge\VsIdeBridge.sln" (default targets).
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:03.66
