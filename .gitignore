@@ -8,3 +8,5 @@ src/VsIdeBridgeCli/bin/
 src/VsIdeBridgeCli/obj/
 tests/**/bin/
 tests/**/obj/
+src/VsIdeBridgeInstaller/bin/
+src/VsIdeBridgeInstaller/obj/
