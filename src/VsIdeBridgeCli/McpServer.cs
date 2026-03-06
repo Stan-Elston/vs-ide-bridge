@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -23,6 +24,7 @@ internal static partial class CliApp
         private const string GitExecutableName = "git";
         private const string CondaExecutableName = "conda";
         private static readonly byte[] RawJsonTerminator = [(byte)'\n'];
+        private const string ServiceControlPipeName = "VsIdeBridgeServiceControl";
         private static readonly byte[] HeaderTerminator = "\r\n\r\n"u8.ToArray();
         private static readonly string[] SupportedProtocolVersions = ["2025-03-26", "2024-11-05"];
         private static readonly string[] CondaExecutableExtensions = [".exe", ".cmd", ".bat", string.Empty];
@@ -206,6 +208,7 @@ internal static partial class CliApp
             var advertiseExtraCapabilities = !options.GetFlag("tools-only");
             var wireFormat = McpWireFormat.HeaderFramed;
             McpTrace("stdin/stdout opened");
+            NotifyService("CLIENT_CONNECTED");
             while (true)
             {
                 JsonObject? response;
@@ -217,15 +220,34 @@ internal static partial class CliApp
                     if (incoming is null)
                     {
                         McpTrace("null request (EOF) — exiting");
+                        NotifyService("CLIENT_DISCONNECTED");
                         return;
                     }
 
                     wireFormat = incoming.WireFormat;
                     var request = incoming.Request;
                     var method = request["method"]?.GetValue<string>() ?? "(null)";
+                    NotifyService("MCP_REQUEST");
                     McpTrace($"got request method={method}");
-                    response = await HandleRequestAsync(request, bridgeBinding, advertiseExtraCapabilities).ConfigureAwait(false);
-                    McpTrace($"handled method={method} response={(response is null ? "null" : "ok")}");
+
+                    var trackInFlight = string.Equals(method, "tools/call", StringComparison.Ordinal);
+                    if (trackInFlight)
+                    {
+                        NotifyService("COMMAND_START");
+                    }
+
+                    try
+                    {
+                        response = await HandleRequestAsync(request, bridgeBinding, advertiseExtraCapabilities).ConfigureAwait(false);
+                        McpTrace($"handled method={method} response={(response is null ? "null" : "ok")}");
+                    }
+                    finally
+                    {
+                        if (trackInFlight)
+                        {
+                            NotifyService("COMMAND_END");
+                        }
+                    }
                 }
                 catch (McpRequestException ex)
                 {
@@ -249,6 +271,35 @@ internal static partial class CliApp
                     await WriteMessageAsync(output, response, wireFormat).ConfigureAwait(false);
                     McpTrace("response written");
                 }
+            }
+        }
+
+        private static void NotifyService(string evt)
+        {
+            if (string.IsNullOrWhiteSpace(evt))
+            {
+                return;
+            }
+
+            try
+            {
+                using var pipe = new NamedPipeClientStream(
+                    ".",
+                    ServiceControlPipeName,
+                    PipeDirection.Out,
+                    PipeOptions.Asynchronous);
+
+                pipe.Connect(100);
+                using var writer = new StreamWriter(pipe, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true)
+                {
+                    AutoFlush = true,
+                };
+
+                writer.WriteLine(evt);
+            }
+            catch
+            {
+                // Service host is optional. MCP server must continue even when service pipe is unavailable.
             }
         }
 

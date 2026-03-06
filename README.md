@@ -72,6 +72,74 @@ This is enough to produce:
 - `src\VsIdeBridge\bin\Debug\net472\VsIdeBridge.dll`
 - `src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe`
 
+### Installer EXE (Preferred)
+
+Build the installer executable:
+
+```bat
+dotnet build src\VsIdeBridgeInstaller\VsIdeBridgeInstaller.csproj -c Release
+```
+
+Run from an elevated PowerShell terminal:
+
+```powershell
+src\VsIdeBridgeInstaller\bin\Release\net8.0-windows\vs-ide-bridge-installer.exe install --configuration Release
+```
+
+Uninstall:
+
+```powershell
+src\VsIdeBridgeInstaller\bin\Release\net8.0-windows\vs-ide-bridge-installer.exe uninstall
+```
+
+Optional service registration is supported only when you provide a real service host binary:
+
+```powershell
+src\VsIdeBridgeInstaller\bin\Release\net8.0-windows\vs-ide-bridge-installer.exe install --configuration Release --install-service --service-exe "C:\Program Files\VsIdeBridge\VsIdeBridgeService.exe"
+```
+
+### Service Install / Uninstall (Manual Start + Idle Auto-Shutdown)
+
+Build required binaries first:
+
+```bat
+scripts\build.bat Release
+dotnet build src\VsIdeBridgeService\VsIdeBridgeService.csproj -c Release
+```
+
+Install as an elevated user:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -Configuration Release
+```
+
+Uninstall:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\uninstall.ps1
+```
+
+Default install behavior:
+
+- Copy bridge CLI and service binaries to `C:\Program Files\VsIdeBridge`
+- Register Windows service `VsIdeBridgeService` with `StartType=Manual`
+- Install/update VSIX `StanElston.VsIdeBridge` via `VSIXInstaller.exe`
+
+Service idle policy:
+
+- Activity includes: `MCP_REQUEST`, active command in-flight, and connected client stream.
+- Never shuts down while commands are in-flight.
+- Emits final `service going idle` log before stopping.
+- Restart path is explicit (`sc start VsIdeBridgeService`) or client activation path.
+
+Logs and recovery:
+
+```powershell
+Get-Content C:\ProgramData\VsIdeBridge\service.log -Tail 200
+sc.exe query VsIdeBridgeService
+sc.exe start VsIdeBridgeService
+sc.exe stop VsIdeBridgeService
+```
 ### Install Or Update The Extension
 
 **Prerequisites — before running the installer:**
@@ -781,4 +849,9 @@ output/                   Local smoke-test artifacts (git-ignored)
 - Symbol commands rely on VS language services, not bridge-side parsing.
 - `execute-command` is the escape hatch for native VS commands that have no first-class bridge equivalent.
 - Simple pipe names are the preferred public contract. The legacy `Tools.Ide*` names remain supported for compatibility.
+
+
+
+
+
 
