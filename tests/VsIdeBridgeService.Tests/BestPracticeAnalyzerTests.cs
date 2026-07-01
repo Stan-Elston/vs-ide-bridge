@@ -66,6 +66,26 @@ public sealed class BestPracticeAnalyzerTests
         Assert.Equal("repeat-me", finding["symbol"]?.ToString());
     }
 
+    [Theory]
+    [InlineData("sample.cpp", "// creates a new node\nint value = 7;\n")]
+    [InlineData("sample.cpp", "/* returns a new mesh from two new meshes */\nint value = 7;\n")]
+    [InlineData("sample.c", "const char* msg = \"allocate a new buffer\";\n")]
+    public void FindRawNewIgnoresCommentAndStringOccurrences(string file, string content)
+    {
+        Assert.DoesNotContain(BestPracticeAnalyzer.FindRawNew(file, content),
+            row => row["code"]?.ToString() == "BP1022");
+    }
+
+    [Fact]
+    public void FindRawNewStillReportsRealAllocation()
+    {
+        string content = "Widget* w = new Widget();\n";
+
+        Newtonsoft.Json.Linq.JObject finding =
+            Assert.Single(BestPracticeAnalyzer.FindRawNew("sample.cpp", content));
+        Assert.Equal("BP1022", finding["code"]?.ToString());
+    }
+
     [Fact]
     public void FindLongLines_FlagsLineOverLimit()
     {

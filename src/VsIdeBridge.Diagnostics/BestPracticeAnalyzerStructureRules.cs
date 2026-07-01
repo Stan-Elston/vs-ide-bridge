@@ -270,9 +270,17 @@ internal static partial class BestPracticeAnalyzer
 
     public static IEnumerable<JObject> FindRawNew(string file, string content)
     {
+        CodeLanguage language = GetLanguage(file);
         int findingCount = 0;
         foreach (Match match in RawNewPattern().Matches(content))
         {
+            // Skip "new" inside comments or string literals (e.g. the English word in
+            // "creates a new edge") so only real C++ allocations are flagged.
+            if (IsInsideComment(content, match.Index, language) || IsInsideStringLiteral(content, match.Index))
+            {
+                continue;
+            }
+
             string line = BestPracticeAnalyzerHelpers.GetLineAt(content, match.Index);
             if (line.Contains("make_unique") || line.Contains("make_shared") || line.Contains("reset("))
             {
@@ -348,6 +356,7 @@ internal static partial class BestPracticeAnalyzer
 #endif
         {
             if (IsInsideCppLineComment(content, match.Index)) continue;
+            if (IsInsideCppStringLiteral(content, match.Index)) continue;
             if (!IsInsideFunctionParams(content, match.Index)) continue;
             string paramName = match.Groups[1].Value;
             yield return DiagnosticRowFactory.CreateBestPracticeRow(
@@ -527,6 +536,23 @@ internal static partial class BestPracticeAnalyzer
     {
         int lineStart = matchIndex > 0 ? content.LastIndexOf('\n', matchIndex - 1) + 1 : 0;
         return content.IndexOf("//", lineStart, matchIndex - lineStart, StringComparison.Ordinal) >= 0;
+    }
+
+    // Returns true when matchIndex falls inside a double-quoted C/C++ string literal
+    // on its line. Used by BP1025 to avoid flagging identifiers that appear in string
+    // text (e.g. the word 'vector' inside the message "... is a string vector ..."
+    // passed to throw_exception), which would otherwise look like a by-value parameter.
+    private static bool IsInsideCppStringLiteral(string content, int matchIndex)
+    {
+        int lineStart = matchIndex > 0 ? content.LastIndexOf('\n', matchIndex - 1) + 1 : 0;
+        bool inString = false;
+        for (int i = lineStart; i < matchIndex; i++)
+        {
+            char ch = content[i];
+            if (ch == '"') { inString = !inString; continue; }
+            if (inString && ch == '\\') i++; // skip escaped character inside the string
+        }
+        return inString;
     }
 
     // Returns true when matchIndex is inside a function parameter list.
