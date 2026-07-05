@@ -51,11 +51,11 @@ internal static partial class SetVersionTool
         if (hasSkipped)
         {
             payload["skipped_files"] = skippedFiles;
-            payload["warning"] = $"Version pattern not found in {skippedFiles.Count} file(s) — those files were NOT updated.";
+            payload["warning"] = $"Version pattern not found in {skippedFiles.Count} file(s) - those files were NOT updated.";
         }
 
         string successText = hasSkipped
-            ? $"Updated {updatedFiles.Count} file(s) to {version}. WARNING: version pattern not found in {skippedFiles.Count} file(s) — check skipped_files."
+            ? $"Updated {updatedFiles.Count} file(s) to {version}. WARNING: version pattern not found in {skippedFiles.Count} file(s) - check skipped_files."
             : $"Updated {updatedFiles.Count} version file(s) to {version}.";
         return Task.FromResult(ToolResultFormatter.StructuredToolResult(payload, args, successText: successText));
     }

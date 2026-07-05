@@ -478,7 +478,9 @@ internal static partial class ToolCatalog
             return false;
         }
 
-        foreach (string? item in queries.Select(node => node?.GetValue<string>()))
+        // Query items may be plain strings or {query, path} objects (see NormalizeBatchQueryList);
+        // calling GetValue<string>() on the object form throws before the batch even runs.
+        foreach (string? item in queries.Select(GetBatchQueryText))
         {
             if (TryGetDiagnosticSearchCode(
                 item,
@@ -494,6 +496,14 @@ internal static partial class ToolCatalog
 
         return false;
     }
+
+    private static string? GetBatchQueryText(JsonNode? node) => node switch
+    {
+        JsonObject obj when obj.TryGetPropertyValue("query", out JsonNode? q)
+            && q is JsonValue qv && qv.TryGetValue(out string? objQuery) => objQuery,
+        JsonValue value when value.TryGetValue(out string? text) => text,
+        _ => null,
+    };
 
     private static bool TryGetDiagnosticSearchCode(
         string? query,

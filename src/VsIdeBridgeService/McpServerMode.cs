@@ -314,7 +314,7 @@ internal static class McpServerMode
             "To distinguish new from pre-existing: any diagnostic in a file you edited that appears after your change is yours; if you cannot tell, note it and ask. " +
             "Math rule: NEVER compute non-trivial arithmetic mentally or guess at a numeric result. " +
             "Always call python_eval with the expression — it runs real Python and returns the exact answer. " +
-            "Pre-imported in both python_eval and python_exec (no import statement needed): math, statistics, decimal, fractions. " +
+            "Both python_eval and python_exec expose full builtins and allow import; pre-imported for convenience: math, statistics, decimal, fractions, re, itertools, collections. " +
             "Example: " + CallToolPrefix + "\"name\":\"python_eval\",\"arguments\":{\"expression\":\"math.sqrt(2)\"}}).";
     }
 

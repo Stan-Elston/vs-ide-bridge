@@ -29,6 +29,7 @@ internal sealed class BridgeWatchdogProbeMetrics
     public double LastDurationMs;
     public double MaxDurationMs;
     public long TotalTimeouts;
+    public long TotalBusyProbes;
     public long TotalFailures;
     public long SuccessfulCount;
 }

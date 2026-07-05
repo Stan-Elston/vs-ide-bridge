@@ -13,11 +13,15 @@ internal static class MemoryTool
     private const int MaxReadLines = 250;
     private const int DefaultCenteredContextLines = 20;
     private const int MaxCenteredContextLines = 100;
+    private const int SearchContextWindowRadius = 2;
+    private const int TwoTermQueryCount = 2;
+    private const int ThreeTermQueryCount = 3;
+    private const int MinimumMultiTermMatches = TwoTermQueryCount;
     private const long MaxSearchFileBytes = 5_000_000;
 
     public static Task<JsonNode> SearchAsync(JsonNode? id, JsonObject? args, BridgeConnection bridge)
     {
-        string query = args?["query"]?.GetValue<string>() ?? string.Empty;
+        string query = (args?["query"]?.GetValue<string>() ?? string.Empty).Trim();
         if (string.IsNullOrWhiteSpace(query))
         {
             throw new McpRequestException(id, McpErrorCodes.InvalidParams, "Missing required argument 'query'.");
@@ -27,19 +31,14 @@ internal static class MemoryTool
         int contextLines = Clamp(args?["context_lines"]?.GetValue<int?>() ?? DefaultSearchContextLines, 0, MaxSearchContextLines);
         bool includeRollouts = args?["include_rollouts"]?.GetValue<bool?>() ?? true;
         string memoryRoot = ResolveMemoryRoot(id, bridge);
+        List<string> queryTerms = BuildQueryTerms(query);
 
-        JsonArray results = [];
+        List<SearchCandidate> candidates = [];
         int searchedFiles = 0;
-        bool truncated = false;
+        int candidateOrder = 0;
 
         foreach (string file in EnumerateMemoryFiles(memoryRoot, includeRollouts))
         {
-            if (results.Count >= maxResults)
-            {
-                truncated = true;
-                break;
-            }
-
             searchedFiles++;
             if (ShouldSkipSearchFile(file))
             {
@@ -60,20 +59,33 @@ internal static class MemoryTool
                 continue;
             }
 
+            string relativePath = ToMemoryRelativePath(memoryRoot, file);
             for (int index = 0; index < lines.Length; index++)
             {
-                if (!lines[index].Contains(query, StringComparison.OrdinalIgnoreCase))
+                int score = ScoreSearchLine(query, queryTerms, relativePath, lines, index,
+                    out int matchedTerms, out bool exactMatch);
+                if (score <= 0)
                 {
                     continue;
                 }
 
-                results.Add(BuildSearchHit(memoryRoot, file, index, lines, contextLines));
-                if (results.Count >= maxResults)
-                {
-                    truncated = true;
-                    break;
-                }
+                candidates.Add(new SearchCandidate(file, index, score, matchedTerms, exactMatch, candidateOrder++));
             }
+        }
+
+        List<SearchCandidate> selected = [.. candidates
+            .OrderByDescending(candidate => candidate.ExactMatch)
+            .ThenByDescending(candidate => candidate.Score)
+            .ThenByDescending(candidate => candidate.MatchedTerms)
+            .ThenBy(candidate => candidate.Order)
+            .Take(maxResults)];
+
+        JsonArray results = [];
+        foreach (SearchCandidate candidate in selected)
+        {
+            string[] lines = File.ReadAllLines(candidate.File);
+            results.Add(BuildSearchHit(memoryRoot, candidate.File, candidate.LineIndex, lines, contextLines,
+                candidate.Score, candidate.MatchedTerms, candidate.ExactMatch));
         }
 
         JsonObject payload = new()
@@ -81,16 +93,19 @@ internal static class MemoryTool
             ["success"] = true,
             ["memoryRoot"] = memoryRoot,
             ["query"] = query,
+            ["queryTerms"] = new JsonArray([.. queryTerms.Select(term => JsonValue.Create(term))]),
             ["maxResults"] = maxResults,
             ["contextLines"] = contextLines,
             ["includeRollouts"] = includeRollouts,
             ["searchedFiles"] = searchedFiles,
+            ["matchCount"] = candidates.Count,
             ["count"] = results.Count,
-            ["truncated"] = truncated,
+            ["truncated"] = candidates.Count > selected.Count,
             ["results"] = results,
         };
 
-        string successText = $"Found {results.Count} memory match(es) across {searchedFiles} file(s).";
+        string successText = $"Found {results.Count} memory match(es) across {searchedFiles} file(s) " +
+            $"from {candidates.Count} candidate line(s).";
         return Task.FromResult<JsonNode>(ToolResultFormatter.StructuredToolResult(payload, args, successText: successText));
     }
 
@@ -163,7 +178,23 @@ internal static class MemoryTool
         return Task.FromResult<JsonNode>(ToolResultFormatter.StructuredToolResult(payload, args, successText: successText));
     }
 
-    private static JsonObject BuildSearchHit(string root, string file, int lineIndex, string[] lines, int contextLines)
+    private sealed record SearchCandidate(
+        string File,
+        int LineIndex,
+        int Score,
+        int MatchedTerms,
+        bool ExactMatch,
+        int Order);
+
+    private static JsonObject BuildSearchHit(
+        string root,
+        string file,
+        int lineIndex,
+        string[] lines,
+        int contextLines,
+        int score,
+        int matchedTerms,
+        bool exactMatch)
     {
         int lineNumber = lineIndex + 1;
         int start = Math.Max(0, lineIndex - contextLines);
@@ -183,9 +214,123 @@ internal static class MemoryTool
             ["path"] = ToMemoryRelativePath(root, file),
             ["line"] = lineNumber,
             ["preview"] = Truncate(lines[lineIndex], 500),
+            ["matchType"] = exactMatch ? "exact" : "terms",
+            ["score"] = score,
+            ["matchedTerms"] = matchedTerms,
             ["context"] = context,
         };
     }
+
+    private static List<string> BuildQueryTerms(string query)
+    {
+        List<string> terms = [];
+        int start = -1;
+
+        for (int index = 0; index <= query.Length; index++)
+        {
+            bool inTerm = index < query.Length && IsSearchTermChar(query[index]);
+            if (inTerm && start < 0)
+            {
+                start = index;
+                continue;
+            }
+
+            if (inTerm || start < 0)
+            {
+                continue;
+            }
+
+            AddQueryTerm(query[start..index], terms);
+            start = -1;
+        }
+
+        return terms.Count > 0 ? terms : [query];
+    }
+
+    private static void AddQueryTerm(string term, List<string> terms)
+    {
+        if (IsStopWord(term) || terms.Contains(term, StringComparer.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        terms.Add(term);
+    }
+
+    private static int ScoreSearchLine(
+        string query,
+        List<string> queryTerms,
+        string relativePath,
+        string[] lines,
+        int lineIndex,
+        out int matchedTerms,
+        out bool exactMatch)
+    {
+        string line = lines[lineIndex];
+        string searchableText = BuildSearchableText(relativePath, lines, lineIndex);
+        exactMatch = line.Contains(query, StringComparison.OrdinalIgnoreCase);
+        matchedTerms = 0;
+        int lineTermMatches = 0;
+
+        foreach (string term in queryTerms)
+        {
+            if (!searchableText.Contains(term, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            matchedTerms++;
+            if (line.Contains(term, StringComparison.OrdinalIgnoreCase))
+            {
+                lineTermMatches++;
+            }
+        }
+
+        if (!exactMatch && (lineTermMatches == 0 || matchedTerms < RequiredTermMatches(queryTerms.Count)))
+        {
+            return 0;
+        }
+
+        int score = exactMatch ? 10_000 : 0;
+        score += matchedTerms * 100;
+        score += lineTermMatches * 20;
+        if (matchedTerms == queryTerms.Count)
+        {
+            score += 500;
+        }
+
+        if (lineTermMatches == queryTerms.Count)
+        {
+            score += 250;
+        }
+
+        return score;
+    }
+
+    private static string BuildSearchableText(string relativePath, string[] lines, int lineIndex)
+    {
+        int start = Math.Max(0, lineIndex - SearchContextWindowRadius);
+        int end = Math.Min(lines.Length - 1, lineIndex + SearchContextWindowRadius);
+        return relativePath + Environment.NewLine + string.Join(Environment.NewLine, lines.Skip(start).Take(end - start + 1));
+    }
+
+    private static int RequiredTermMatches(int termCount)
+        => termCount switch
+        {
+            <= 1 => 1,
+            TwoTermQueryCount => TwoTermQueryCount,
+            ThreeTermQueryCount => MinimumMultiTermMatches,
+            _ => termCount - 1,
+        };
+
+    private static bool IsSearchTermChar(char ch)
+        => char.IsLetterOrDigit(ch) || ch is '_' or '-' or '#' or '.';
+
+    private static bool IsStopWord(string term)
+        => term.Length <= 1 || term.ToLowerInvariant() is
+            "a" or "an" or "and" or "are" or "as" or "at" or "be" or "but" or "by" or
+            "for" or "from" or "how" or "in" or "into" or "is" or "it" or "of" or "on" or
+            "or" or "that" or "the" or "this" or "to" or "use" or "using" or "with";
 
     private static IEnumerable<string> EnumerateMemoryFiles(string root, bool includeRollouts)
     {
@@ -278,6 +423,7 @@ internal static class MemoryTool
         AddHomeCandidate(candidates, Environment.GetEnvironmentVariable("USERPROFILE"));
         AddHomeCandidate(candidates, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
         AddHomeCandidate(candidates, InferUserHomeFromSolution(bridge));
+        AddHomeCandidate(candidates, InferUserHomeFromDiscoveryFile(bridge));
 
         foreach (string candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
         {
@@ -334,6 +480,71 @@ internal static class MemoryTool
             }
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        return null;
+    }
+
+    // The VSIX publishes its discovery JSON under the interactive user's temp directory
+    // (C:\Users\<name>\AppData\Local\Temp\...). When this service runs as LocalSystem its
+    // own profile is systemprofile and has no .codex, and the solution may live outside
+    // C:\Users - a discovery path is then the most reliable pointer to the real user's home.
+    private static string? InferUserHomeFromDiscoveryFile(BridgeConnection bridge)
+    {
+        string? home = TryInferUserHomeFromDiscoveryPath(bridge.CurrentInstance?.DiscoveryFile);
+        if (home is not null)
+        {
+            return home;
+        }
+
+        // Not bound yet (a fresh HTTP session hits this): any discovered instance works,
+        // because every VSIX publishes its discovery file under its own user profile.
+        try
+        {
+            IReadOnlyList<BridgeInstance> instances = VsDiscovery.ListAsync(bridge.Mode)
+                .ConfigureAwait(false)
+                .GetAwaiter()
+                .GetResult();
+            foreach (BridgeInstance instance in instances)
+            {
+                home = TryInferUserHomeFromDiscoveryPath(instance.DiscoveryFile);
+                if (home is not null)
+                {
+                    return home;
+                }
+            }
+        }
+        catch (BridgeException)
+        {
+            return null;
+        }
+
+        return null;
+    }
+
+    private static string? TryInferUserHomeFromDiscoveryPath(string? discoveryFile)
+    {
+        if (string.IsNullOrWhiteSpace(discoveryFile) || !Path.IsPathRooted(discoveryFile))
+        {
+            return null;
+        }
+
+        try
+        {
+            DirectoryInfo? directory = new FileInfo(discoveryFile).Directory;
+            while (directory is not null)
+            {
+                if (string.Equals(directory.Parent?.Name, "Users", StringComparison.OrdinalIgnoreCase))
+                {
+                    return directory.FullName;
+                }
+
+                directory = directory.Parent;
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
         {
             return null;
         }

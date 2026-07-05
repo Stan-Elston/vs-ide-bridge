@@ -13,6 +13,9 @@ set "VSIX_OBJ=%ROOT%\src\VsIdeBridge\obj\%CONFIG%\net472"
 :: Locate MSBuild via vswhere (works for Community, Professional, Enterprise, Preview)
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 if not exist "%VSWHERE%" set "VSWHERE=%ProgramFiles%\Microsoft Visual Studio\Installer\vswhere.exe"
+:: Literal fallback: ProgramFiles(x86) is not defined in some host environments
+:: (e.g. processes spawned by the bridge service with a stripped environment).
+if not exist "%VSWHERE%" set "VSWHERE=C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
 
 if not exist "%VSWHERE%" (
     echo ERROR: vswhere.exe not found. Install Visual Studio first.

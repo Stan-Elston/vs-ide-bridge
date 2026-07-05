@@ -500,16 +500,15 @@ internal sealed partial class PatchService
         // Pass 3: anchor-line matching. When exact and fuzzy sequential passes fail, pick the most
         // unique line in the context block as an anchor, then score every candidate position by how
         // many of its context lines match fuzzily. Accept the highest-scoring position provided it
-        // covers at least 60 % of lines — or accept unconditionally when all context lines are
-        // trivial (blank or single-character braces/brackets) and no better signal is available.
+        // covers at least 60 % of lines and at least one context line is distinctive — a position
+        // matched purely on blank lines and lone braces is ambiguous, so fail with guidance below
+        // rather than silently patching a guessed location.
         (int bestCandidate, int bestScore) = FindBestAnchorMatch(existingLines, sourceIndex, maxStart, matchLines);
-        if (bestCandidate >= 0 && (bestScore * 5 >= matchLines.Length * 3 || AllTrivialMatchLines(matchLines)))
+        bool trivialContext = AllTrivialMatchLines(matchLines);
+        if (bestCandidate >= 0 && !trivialContext && bestScore * 5 >= matchLines.Length * 3)
         {
             return bestCandidate;
         }
-
-        // Re-run Pass 3 to find the best partial match for a useful error message.
-        (int errorBestCandidate, int errorBestScore) = FindBestAnchorMatch(existingLines, sourceIndex, maxStart, matchLines);
 
         // Detect the simple-replace form (file + old_content + new_content).
         // FromSimpleReplace produces a block with only '-' and '+' lines — no context lines.
@@ -517,9 +516,14 @@ internal sealed partial class PatchService
 
         string firstMatchLine = matchLines.Length > 0 ? Truncate(matchLines[0], 60) : "(empty)";
         string lineNoun = isSimpleReplace ? "old_content" : "context";
-        string bestMatchHint = errorBestCandidate >= 0
-            ? $" The closest match was at line {errorBestCandidate + 1} but only {errorBestScore} of {matchLines.Length} {lineNoun} lines matched."
+        string bestMatchHint = bestCandidate >= 0
+            ? $" The closest match was at line {bestCandidate + 1} but only {bestScore} of {matchLines.Length} {lineNoun} lines matched."
             : $" No candidate position matched any {lineNoun} line.";
+        if (trivialContext)
+        {
+            bestMatchHint += " Every context line is trivial (blank or a lone brace/bracket), which matches too many " +
+                "places to apply safely — include at least one distinctive code line in the context.";
+        }
         string fixInstructions = isSimpleReplace
             ? "NEVER fall back to write_file after this error — that overwrites the entire file and destroys unrelated content. " +
               "To fix: (1) Call read_file on this file — use the h: or f: handle if you have one from a prior find_text, find_files, or search result. " +
@@ -542,8 +546,8 @@ internal sealed partial class PatchService
             {
                 block = block.Header,
                 sourceIndex = sourceIndex + 1,
-                bestMatchLine = errorBestCandidate >= 0 ? errorBestCandidate + 1 : (int?)null,
-                bestMatchScore = errorBestCandidate >= 0 ? errorBestScore : (int?)null,
+                bestMatchLine = bestCandidate >= 0 ? bestCandidate + 1 : (int?)null,
+                bestMatchScore = bestCandidate >= 0 ? bestScore : (int?)null,
                 matchLines,
             });
     }

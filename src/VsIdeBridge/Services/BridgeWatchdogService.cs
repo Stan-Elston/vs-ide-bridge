@@ -113,11 +113,15 @@ internal sealed class BridgeWatchdogService(
             double probeStalledForMs = probeStalled
                 ? Math.Max(0, (now - _probe.Lifecycle.StartedAtUtc).TotalMilliseconds)
                 : 0;
+            // A stalled probe while a foreground command holds the UI thread is expected
+            // busy behavior, not a health failure (field report issue 4).
+            bool commandActive = _command.Active.StartedAtUtc is not null;
+            bool busy = probeStalled && commandActive;
             bool timeoutWindowOpen = _probe.Health.LastTimeoutCommandAtUtc is not null &&
                 (now - _probe.Health.LastTimeoutCommandAtUtc.Value).TotalMilliseconds <= CommandTimeoutDegradedWindowMilliseconds;
-            bool degraded = _probe.Health.IsDegraded || probeStalled || timeoutWindowOpen;
+            bool degraded = _probe.Health.IsDegraded || (probeStalled && !commandActive) || timeoutWindowOpen;
             string degradedReason = _probe.Health.DegradedReason;
-            if (probeStalled)
+            if (probeStalled && !commandActive)
             {
                 degradedReason = "watchdog_probe_timeout";
             }
@@ -138,6 +142,8 @@ internal sealed class BridgeWatchdogService(
                 ["probeTimeoutMs"] = _probeTimeoutMilliseconds,
                 ["isDegraded"] = degraded,
                 ["degradedReason"] = degradedReason,
+                ["isBusy"] = busy,
+                ["totalBusyProbes"] = _probe.Metrics.TotalBusyProbes,
                 ["degradedSinceUtc"] = ToNullableTimestamp(_probe.Health.DegradedSinceUtc),
                 ["lastProbeStartedAtUtc"] = ToNullableTimestamp(_probe.Lifecycle.LastStartedAtUtc),
                 ["lastProbeCompletedAtUtc"] = ToNullableTimestamp(_probe.Lifecycle.LastCompletedAtUtc),
@@ -339,20 +345,30 @@ internal sealed class BridgeWatchdogService(
         DateTimeOffset now = DateTimeOffset.UtcNow;
         lock (_sync)
         {
+            bool foregroundCommandActive = _command.Active.StartedAtUtc is not null;
             double activeCommandElapsedMs = _command.Active.StartedAtUtc is null
                 ? 0.0
                 : Math.Max(0, (now - _command.Active.StartedAtUtc.Value).TotalMilliseconds);
-            _probe.Metrics.TotalTimeouts++;
-            _probe.Health.ConsecutiveUnhealthyProbes++;
             _probe.Health.LastProbeTimeoutCommand.Name = _command.Active.Name;
             _probe.Health.LastProbeTimeoutCommand.RequestId = _command.Active.RequestId;
             _probe.Health.LastProbeTimeoutCommand.StartedAtUtc = _command.Active.StartedAtUtc;
             _probe.Health.LastProbeTimeoutCommand.DetectedAtUtc = now;
             _probe.Health.LastProbeTimeoutCommand.ElapsedMs = activeCommandElapsedMs;
-            string activeCommandName = string.IsNullOrWhiteSpace(_command.Active.Name)
-                ? "<unknown>"
-                : _command.Active.Name;
-            _probe.Health.LastError = $"UI responsiveness probe exceeded {_probeTimeoutMilliseconds} ms (elapsed={Math.Round(elapsedMs, 1)} ms, activeCommand={activeCommandName}).";
+
+            if (foregroundCommandActive)
+            {
+                // The UI thread is legitimately held by a foreground command (build, long
+                // diagnostics refresh). That is busy, not unhealthy (field report issue 4):
+                // count it separately and leave the degraded state untouched.
+                _probe.Metrics.TotalBusyProbes++;
+                _probe.Health.LastError = $"UI responsiveness probe exceeded {_probeTimeoutMilliseconds} ms while foreground command " +
+                    $"{_command.Active.Name} was running for {Math.Round(activeCommandElapsedMs, 1)} ms (busy, not a failure).";
+                return;
+            }
+
+            _probe.Metrics.TotalTimeouts++;
+            _probe.Health.ConsecutiveUnhealthyProbes++;
+            _probe.Health.LastError = $"UI responsiveness probe exceeded {_probeTimeoutMilliseconds} ms (elapsed={Math.Round(elapsedMs, 1)} ms) with no bridge command running.";
             if (!_probe.Health.IsDegraded)
             {
                 _probe.Health.DegradedSinceUtc = now;

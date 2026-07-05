@@ -172,7 +172,16 @@ internal static partial class ToolCatalog
                     diagnosticsArgs,
                     args)
                 .ConfigureAwait(false);
-            CompactDiagnosticsResponse(response, args);
+            bridge.DocumentDiagnostics.RecordLiveRead(
+                cacheSeverity,
+                commandName,
+                response,
+                replaceCachedBucket: CanReplaceDiagnosticsCache(args, cacheSeverity),
+                invalidateCachedBucket: ShouldInvalidateDiagnosticsCache(args));
+            JsonObject? compactionArgs = IsDiagnosticsSnapshotFallback(response)
+                ? args
+                : CreateDiagnosticsCompactionArgs(args);
+            CompactDiagnosticsResponse(response, compactionArgs);
             PatchFilterEcho(response, args);
             return BridgeResult(response);
         }
@@ -197,7 +206,7 @@ internal static partial class ToolCatalog
             "when counts look stale or incomplete. " +
             "With wait_for_intellisense=false it prefers the fast current snapshot; true is slower but fresher. " +
             "Each row in the errors, warnings, and messages buckets includes a handle field " +
-            "(e:N for errors, w:N for warnings, m:N for messages) — pass it directly as the " +
+            "(e:N for errors, w:N for warnings, m:N for messages) - pass it directly as the " +
             "file argument to read_file, open_file, or apply_diff instead of copying the full path.",
             ObjectSchema(
                 OptBool(WaitForIntellisense, "Wait for IntelliSense readiness (default false)."),
@@ -269,9 +278,60 @@ internal static partial class ToolCatalog
         AddSuppressionRepairPrompt(response, suppressionWarningCount);
     }
 
-    // The VSIX only receives severity/quick/max — content filters (code, project, path,
-    // file, text, sort, group_by, pagination) are applied service-side by DiagnosticCollection.
-    // Patch the filter echo so it reflects what was actually applied.
+    internal static JsonObject? CreateDiagnosticsCompactionArgs(JsonObject? args)
+    {
+        if (args is null
+            || (!LooksLikeDiagnosticsHandleFilter(OptionalString(args, FileArg))
+                && !LooksLikeDiagnosticsHandleFilter(OptionalString(args, Path))))
+        {
+            return args;
+        }
+
+        JsonObject clone = args.DeepClone().AsObject();
+        if (LooksLikeDiagnosticsHandleFilter(OptionalString(clone, FileArg)))
+        {
+            clone.Remove(FileArg);
+        }
+
+        if (LooksLikeDiagnosticsHandleFilter(OptionalString(clone, Path)))
+        {
+            clone.Remove(Path);
+        }
+
+        return clone;
+    }
+
+    private static bool IsDiagnosticsSnapshotFallback(JsonObject response)
+        => response["Cache"] is JsonObject cache
+            && string.Equals(cache["source"]?.GetValue<string>(), "diagnostics-snapshot", StringComparison.OrdinalIgnoreCase);
+
+    private static bool LooksLikeDiagnosticsHandleFilter(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        string trimmed = value.Trim();
+        if (trimmed.Length < 3 || trimmed[1] != ':' || !char.IsLetter(trimmed[0]))
+        {
+            return false;
+        }
+
+        for (int index = 2; index < trimmed.Length; index++)
+        {
+            if (!char.IsDigit(trimmed[index]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // The VSIX receives content filters and resolves diagnostic handles before querying.
+    // The service still compacts/paginates the response, so handle-valued file/path
+    // filters are removed from that second pass and echoed below from the original request.
     private static void PatchFilterEcho(JsonObject response, JsonObject? args)
     {
         if (args is null) return;
@@ -526,8 +586,14 @@ internal static partial class ToolCatalog
             && (message.Contains("Timed out waiting for VS bridge response", StringComparison.OrdinalIgnoreCase)
                 || message.Contains("Visual Studio may be blocked", StringComparison.OrdinalIgnoreCase));
 
-    private static string BuildDiagnosticRowsCommandArgs(JsonObject? args, string? defaultSeverity)
-        => Build(
+    internal static string BuildDiagnosticRowsCommandArgs(JsonObject? args, string? defaultSeverity)
+    {
+        // In grouped mode the group summary must cover ALL filtered rows, and group
+        // pagination is applied service-side by DiagnosticCollection.WriteTo. Forwarding
+        // the client's row chunking to the VSIX would truncate the row set before the
+        // service regroups it, so grouped counts would only reflect the current row chunk.
+        bool grouped = !string.IsNullOrWhiteSpace(OptionalString(args, GroupBy));
+        return Build(
             (Severity, OptionalString(args, Severity) ?? defaultSeverity),
             BoolArg(WaitForIntellisenseHyphen, args, WaitForIntellisense, false, true),
             BoolArg(Quick, args, Quick, ShouldUsePassiveDiagnosticsRead(args), true),
@@ -545,8 +611,49 @@ internal static partial class ToolCatalog
             ("group-sort-direction", OptionalString(args, GroupSortDirection)),
             ("group-min-count",      OptionalText(args, GroupMinCount)),
             ("group-max-count",      OptionalText(args, GroupMaxCount)),
-            ("chunk-size",           OptionalText(args, ChunkSize)),
-            ("chunk-index",          OptionalText(args, ChunkIndex)));
+            ("chunk-size",           grouped ? "0" : OptionalText(args, ChunkSize)),
+            ("chunk-index",          grouped ? null : OptionalText(args, ChunkIndex)));
+    }
+
+    private static bool CanReplaceDiagnosticsCache(JsonObject? args, string cacheSeverity)
+    {
+        if (HasDiagnosticsContentFilter(args) || HasDiagnosticsViewTransform(args))
+        {
+            return false;
+        }
+
+        string? requestedSeverity = OptionalString(args, Severity);
+        return string.IsNullOrWhiteSpace(requestedSeverity)
+            || string.Equals(requestedSeverity, cacheSeverity, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ShouldInvalidateDiagnosticsCache(JsonObject? args)
+        => args?[Refresh]?.GetValue<bool>() == true;
+
+    private static bool HasDiagnosticsContentFilter(JsonObject? args)
+        => HasNonEmptyStringArg(args, Code)
+            || HasNonEmptyStringArg(args, Project)
+            || HasNonEmptyStringArg(args, Path)
+            || HasNonEmptyStringArg(args, FileArg)
+            || HasNonEmptyStringArg(args, Text);
+
+    private static bool HasDiagnosticsViewTransform(JsonObject? args)
+        => HasPositiveIntegerArg(args, Max)
+            || HasPositiveIntegerArg(args, ChunkSize)
+            || HasPositiveIntegerArg(args, ChunkIndex)
+            || args?[GroupBy] is not null
+            || args?[GroupSortBy] is not null
+            || args?[GroupSortDirection] is not null
+            || args?[GroupMinCount] is not null
+            || args?[GroupMaxCount] is not null;
+
+    private static bool HasNonEmptyStringArg(JsonObject? args, string key)
+        => !string.IsNullOrWhiteSpace(OptionalString(args, key));
+
+    private static bool HasPositiveIntegerArg(JsonObject? args, string key)
+        => args?[key] is JsonValue value
+            && value.TryGetValue(out int parsed)
+            && parsed > 0;
 
     private static string BuildQuickDiagnosticRowsCommandArgs(JsonObject? args)
         => Build(

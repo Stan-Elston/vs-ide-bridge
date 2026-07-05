@@ -10,10 +10,11 @@ internal static partial class ToolCatalog
     private static IEnumerable<ToolEntry> MemoryTools()
     {
         yield return new("memory_search",
-            "Search Codex memory files without writing anything to disk. Results include memory-relative paths, " +
-            "line numbers, previews, and small bounded context snippets.",
+            "Search Codex memory files without writing anything to disk. Supports exact text and ranked " +
+            "multi-term queries; results include memory-relative paths, line numbers, previews, and small " +
+            "bounded context snippets.",
             ObjectSchema(
-                Req("query", "Case-insensitive text to search for in Codex memory files."),
+                Req("query", "Case-insensitive text or space-separated terms to search for in Codex memory files."),
                 OptInt("max_results", "Maximum matches to return (default 25, max 100)."),
                 OptInt("context_lines", "Context lines before and after each match (default 1, max 5)."),
                 OptBool("include_rollouts", "Also search rollout summaries when true (default true).")),

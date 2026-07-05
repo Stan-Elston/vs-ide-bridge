@@ -396,12 +396,11 @@ internal sealed partial class DocumentService
 
         if (!string.IsNullOrWhiteSpace(filePath))
         {
-            if (HandleService is { } hs)
-            {
-                filePath = hs.ResolveFilePath(filePath!);
-            }
-
-            string normalizedPath = PathNormalization.NormalizeFilePath(filePath);
+            // Use the full resolver (handles, solution items, ancestor search roots). Naive
+            // normalization resolves relative paths against the solution directory, which for
+            // out-of-tree builds is the build tree — "src/foo.cpp" must find the project-backed
+            // source file, not fail on a nonexistent build-dir copy.
+            string normalizedPath = ResolveDocumentPath(dte, filePath);
             if (!File.Exists(normalizedPath))
             {
                 throw new CommandErrorException(DocumentNotFoundCode, $"File not found: {normalizedPath}. Call find_files to locate the correct path, then retry.");

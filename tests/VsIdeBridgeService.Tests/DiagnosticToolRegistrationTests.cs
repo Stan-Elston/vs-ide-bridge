@@ -143,6 +143,25 @@ public sealed class DiagnosticToolRegistrationTests
         Assert.Contains("wait up to 10 minutes", description);
     }
 
+    [Fact]
+    public void DiagnosticsCompactionArgsRemoveHandleFileFiltersOnlyForSecondPass()
+    {
+        JsonObject args = new()
+        {
+            ["file"] = "w:35",
+            ["path"] = "src/libslic3r",
+            ["code"] = "C4244",
+            ["chunk_size"] = 0,
+        };
+
+        JsonObject compactArgs = Assert.IsType<JsonObject>(ToolCatalog.CreateDiagnosticsCompactionArgs(args));
+
+        Assert.False(compactArgs.ContainsKey("file"));
+        Assert.Equal("src/libslic3r", compactArgs["path"]!.GetValue<string>());
+        Assert.Equal("C4244", compactArgs["code"]!.GetValue<string>());
+        Assert.Equal("w:35", args["file"]!.GetValue<string>());
+    }
+
     private static ToolDefinition GetDefinition(string toolName)
     {
         Assert.True(ToolCatalog.CreateRegistry().TryGetDefinition(toolName, out ToolDefinition? definition));

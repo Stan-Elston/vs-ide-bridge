@@ -8,14 +8,61 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using VsIdeBridge.Infrastructure;
+using VsIdeBridge.Tooling.Build;
 
 namespace VsIdeBridge.Services;
 
 internal static class BuildServiceHelpers
 {
+    /// <summary>
+    /// The Error List does not always receive linker/MSBuild failures (LNK2001/LNK1120 never
+    /// populate it), so after a failed build parse the Build pane into structured rows the
+    /// model can act on directly instead of trusting a zero-error Error List.
+    /// </summary>
+    internal static async Task AttachBuildOutputErrorsAsync(IdeCommandContext context, JObject buildResult)
+    {
+        if (buildResult["succeeded"]?.Value<bool>() != false)
+        {
+            return;
+        }
+
+        string? buildOutput = await context.Runtime.OutputWindowService.TryReadBuildPaneTextAsync(context.Dte).ConfigureAwait(true);
+        IReadOnlyList<BuildOutputError> parsed = BuildOutputErrorParser.ParseErrors(buildOutput);
+        JArray rows = [];
+        foreach (BuildOutputError error in parsed)
+        {
+            JObject row = new()
+            {
+                ["severity"] = error.Severity,
+                ["code"] = error.Code,
+                ["message"] = error.Message,
+                ["file"] = error.File,
+                ["line"] = error.Line,
+                ["column"] = error.Column,
+                ["rawLine"] = error.RawLine,
+            };
+
+            if (error.HasProjectOrigin)
+            {
+                row["originFile"] = error.OriginFile;
+                row["originLine"] = error.OriginLine;
+                row["originColumn"] = error.OriginColumn;
+                row["originRawLine"] = error.OriginRawLine;
+            }
+
+            rows.Add(row);
+        }
+
+        buildResult["buildOutputErrors"] = rows;
+        buildResult["buildOutputErrorCount"] = rows.Count;
+        buildResult["nextStep"] = rows.Count > 0
+            ? "Build failed. buildOutputErrors contains the compiler/linker failures parsed from the Build output pane; the Error List may not show them. Fix those first, or call read_output {pane:\"Build\"} for full context."
+            : "Build failed, but no error lines could be parsed from the Build output pane and the Error List may also be empty. Call read_output {pane:\"Build\"} to inspect the raw build log.";
+    }
     internal static JObject GetBuildStateCore(DTE2 dte, string solutionNotOpenCode, string noSolutionOpen, string solutionPathKey, string activeConfigurationKey, string activePlatformKey)
     {
         ThreadHelper.ThrowIfNotOnUIThread();

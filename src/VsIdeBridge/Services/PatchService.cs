@@ -235,7 +235,7 @@ internal sealed partial class PatchService
 
                 Directory.CreateDirectory(Path.GetDirectoryName(paths.TargetPath)!);
 
-                // Pre-write best-practice analysis â€” only when caller opts in.
+                // Pre-write best-practice analysis - only when caller opts in.
                 IReadOnlyList<JObject> preWriteWarnings = includeBestPracticeWarnings
                     ? ErrorListService.AnalyzeContentBeforeWrite(paths.TargetPath, result.Content)
                     : [];
@@ -357,7 +357,7 @@ internal sealed partial class PatchService
 
         throw new CommandErrorException(
             InvalidArgumentsCode,
-            $"Patch produced no content change for {targetPath} â€” {result.MutationLineCount} mutation line(s) but 0 matched context lines. " +
+            $"Patch produced no content change for {targetPath} - {result.MutationLineCount} mutation line(s) but 0 matched context lines. " +
             "The patch content does not match the file. Fix: call read_file to check the actual content before retrying.",
             new
             {

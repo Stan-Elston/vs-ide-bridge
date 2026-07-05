@@ -109,61 +109,53 @@ internal static partial class ToolCatalog
         JsonArray editResults = [];
         int applied = 0;
         int failed = 0;
+        int skipped = 0;
         foreach (JsonNode? editNode in editsArray)
         {
             if (editNode is not JsonObject edit) continue;
             string? editFileArg = edit["file"]?.GetValue<string>();
 
-            ApplyDiffRequest editRequest;
-            try
-            {
-                editRequest = ApplyDiffRequest.FromJsonObject(edit);
-            }
-            catch (ApplyDiffValidationException ex)
+            // Later edits often depend on earlier ones (e.g. a constant introduced by edit 1
+            // and referenced by edit 3). After the first failure, skip the rest instead of
+            // saving dependent edits around a missing prerequisite.
+            if (failed > 0)
             {
                 editResults.Add(new JsonObject
                 {
                     ["file"] = editFileArg,
                     ["success"] = false,
-                    ["error"] = ex.Message,
+                    ["skipped"] = true,
+                    ["error"] = "Skipped: an earlier edit in this call failed.",
                 });
-                failed++;
+                skipped++;
                 continue;
             }
 
-            JsonObject editResult = await bridge.SendAsync(id, "apply-diff", BuildApplyDiffArgs(editRequest))
-                .ConfigureAwait(false);
-            bool success = editResult["Success"]?.GetValue<bool>() ?? false;
-            bool alreadySatisfied = success &&
-                editResult["Data"]?["items"] is JsonArray editItems &&
-                editItems.Count > 0 &&
-                editItems[0]?["alreadySatisfied"]?.GetValue<bool?>() == true;
-            if (success) applied++; else failed++;
-            JsonObject entry = new()
-            {
-                ["file"] = editFileArg,
-                ["success"] = success,
-            };
-            if (alreadySatisfied)
-                entry["alreadySatisfied"] = true;
-            if (editRequest.ReplaceAll)
-                entry["replaceAll"] = true;
-            if (!success)
-                entry["error"] = editResult["Summary"]?.GetValue<string>();
+            JsonObject entry = await ApplySingleEditAsync(id, edit, editFileArg, bridge).ConfigureAwait(false);
+            if (entry["success"]?.GetValue<bool>() == true) applied++; else failed++;
             editResults.Add(entry);
         }
 
+        int totalEdits = applied + failed + skipped;
+        string summary = failed == 0
+            ? $"Applied {applied}/{totalEdits} edit(s)."
+            : applied == 0
+                ? $"Applied 0/{totalEdits} edit(s): the first edit failed and {skipped} later edit(s) were skipped. No files were modified by this call."
+                : $"PARTIAL MUTATION: applied {applied}, failed 1, skipped {skipped} of {totalEdits} edit(s). " +
+                  "The applied edits are already saved; the file may be inconsistent until the failed edit lands. " +
+                  "Fix the failed edit now (see edits array) and resubmit ONLY the failed and skipped edits.";
         JsonObject combined = new()
         {
             ["Success"]  = failed == 0,
-            ["Summary"]  = $"Applied {applied}/{applied + failed} edit(s)." +
-                (failed > 0 ? $" {failed} failed — see edits array for details." : ""),
+            ["Summary"]  = summary,
             ["Warnings"] = new JsonArray(),
             ["Data"]     = new JsonObject
             {
-                ["count"]   = applied + failed,
+                ["count"]   = totalEdits,
                 ["applied"] = applied,
                 ["failed"]  = failed,
+                ["skipped"] = skipped,
+                ["partialMutation"] = failed > 0 && applied > 0,
                 ["edits"]   = editResults,
             },
         };
@@ -172,6 +164,45 @@ internal static partial class ToolCatalog
             combined["postCheck"] = await RunDocumentPostCheckAsync(bridge, ApplyDiffTool).ConfigureAwait(false);
         }
         return combined;
+    }
+
+    private static async Task<JsonObject> ApplySingleEditAsync(
+        JsonNode? id, JsonObject edit, string? editFileArg, BridgeConnection bridge)
+    {
+        ApplyDiffRequest editRequest;
+        try
+        {
+            editRequest = ApplyDiffRequest.FromJsonObject(edit);
+        }
+        catch (ApplyDiffValidationException ex)
+        {
+            return new JsonObject
+            {
+                ["file"] = editFileArg,
+                ["success"] = false,
+                ["error"] = ex.Message,
+            };
+        }
+
+        JsonObject editResult = await bridge.SendAsync(id, "apply-diff", BuildApplyDiffArgs(editRequest))
+            .ConfigureAwait(false);
+        bool success = editResult["Success"]?.GetValue<bool>() ?? false;
+        bool alreadySatisfied = success &&
+            editResult["Data"]?["items"] is JsonArray editItems &&
+            editItems.Count > 0 &&
+            editItems[0]?["alreadySatisfied"]?.GetValue<bool?>() == true;
+        JsonObject entry = new()
+        {
+            ["file"] = editFileArg,
+            ["success"] = success,
+        };
+        if (alreadySatisfied)
+            entry["alreadySatisfied"] = true;
+        if (editRequest.ReplaceAll)
+            entry["replaceAll"] = true;
+        if (!success)
+            entry["error"] = editResult["Summary"]?.GetValue<string>();
+        return entry;
     }
 
     private static IEnumerable<ToolEntry> ApplyDiffTools()
@@ -357,10 +388,12 @@ internal static partial class ToolCatalog
                 related: [("close_file", "Close a specific tab"), (ListTabsTool, "See what is open")]));
 
         yield return BridgeTool("save_document",
-            "Save one document by path or save all open documents.",
-            ObjectSchema(Opt(FileArg, "FileArg to save. Omit to save all.")),
+            "Save one document by path or handle, or save all open documents when file is omitted.",
+            ObjectSchema(Opt(FileArg, "FileArg to save (path or handle). Omit to save all open documents.")),
             "save-document",
-            a => Build((FileArg, OptionalString(a, FileArg))),
+            a => OptionalString(a, FileArg) is { } file && !string.IsNullOrWhiteSpace(file)
+                ? Build((FileArg, file))
+                : Build(("all", "true")),
             searchHints: BuildSearchHints(
                 workflow: [("errors", "Check diagnostics after saving")],
                 related: [("reload_document", "Reload after external changes"), (ApplyDiffTool, "Apply changes before saving")]));
@@ -748,10 +781,14 @@ internal static partial class ToolCatalog
         int warningCount = GetSeverityCount(errorsData, "Warning");
         int messageCount = GetSeverityCount(errorsData, "Message");
         bool hasErrors = errorCount > 0 || (errorsData?["hasErrors"]?.GetValue<bool>() ?? false);
-        bool anyIssues = errorCount + warningCount + messageCount > 0;
-        string summary = anyIssues
-            ? $"{errorCount} error(s) · {warningCount} warning(s) · {messageCount} message(s) — fix all before building."
-            : $"0 errors · 0 warnings · 0 messages — clean.";
+        string counts = $"{errorCount} error(s), {warningCount} warning(s), {messageCount} message(s)";
+        // Warnings/messages don't block the build; only errors do. Still surface them so the
+        // model doesn't declare victory while cleanup targets remain.
+        string summary = hasErrors
+            ? $"{counts} - fix errors before building."
+            : warningCount + messageCount > 0
+                ? $"{counts} - no errors; the build can succeed, but warnings/messages remain to fix."
+                : $"{counts} - clean.";
         JsonObject result = new()
         {
             ["mode"] = "refresh-and-wait",

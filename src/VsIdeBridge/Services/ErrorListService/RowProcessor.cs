@@ -71,6 +71,51 @@ internal sealed partial class ErrorListService
         return "diagnostic";
     }
 
+    private static JObject ApplyDiagnosticAnnotations(JObject row)
+    {
+        string code = GetRowString(row, CodeKey);
+        if (!IsVisualStudioAnalyzerLimitedCode(code))
+        {
+            return row;
+        }
+
+        row["analyzerLimited"] = true;
+        row[CodeFamilyKey] = "analyzer";
+        row[SourceKey] = string.IsNullOrWhiteSpace(GetRowString(row, SourceKey))
+            ? "visual-studio-analyzer"
+            : GetRowString(row, SourceKey);
+        row[ToolKey] = string.IsNullOrWhiteSpace(GetRowString(row, ToolKey))
+            ? "visual-studio-analyzer"
+            : GetRowString(row, ToolKey);
+        row[AuthorityKey] = "visual-studio-analyzer-limited";
+        row[GuidanceKey] = MergeDiagnosticText(
+            GetRowString(row, GuidanceKey),
+            "Visual Studio analyzer-limited row: VCR001/VCR003 can lag or misread modern C++ constructs such as '= delete' and explicit specializations. Verify against current source and build output before editing.");
+        row[SuggestedActionKey] = MergeDiagnosticText(
+            GetRowString(row, SuggestedActionKey),
+            "Treat as advisory analyzer output; refresh diagnostics or build before making semantic changes.");
+        row[LlmFixPromptKey] = MergeDiagnosticText(
+            GetRowString(row, LlmFixPromptKey),
+            "Do not assume this VCR row is authoritative. Confirm the construct in source/build output first, especially for '= delete' and explicit specialization patterns.");
+        return row;
+    }
+
+    private static bool IsVisualStudioAnalyzerLimitedCode(string code)
+        => string.Equals(code, "VCR001", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(code, "VCR003", StringComparison.OrdinalIgnoreCase);
+
+    private static string MergeDiagnosticText(string existing, string addition)
+    {
+        if (string.IsNullOrWhiteSpace(existing))
+        {
+            return addition;
+        }
+
+        return existing.Contains(addition, StringComparison.Ordinal)
+            ? existing
+            : string.Concat(existing, " ", addition);
+    }
+
     private static IReadOnlyList<string> ExtractSymbols(string description)
     {
         HashSet<string> symbols = [];

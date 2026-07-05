@@ -118,6 +118,39 @@ internal sealed class DocumentDiagnosticsCoordinator(BridgeConnection bridge)
         }
     }
 
+    public void RecordLiveRead(string severity, string kind, JsonObject response, bool replaceCachedBucket, bool invalidateCachedBucket)
+    {
+        if (response["Success"]?.GetValue<bool>() != true)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (replaceCachedBucket
+                && !IsStaleDiagnosticsResponse(response)
+                && response["Data"] is JsonObject data
+                && data[DiagnosticJsonNames.Rows] is JsonArray)
+            {
+                SetCachedBucket(severity, DiagnosticBucket.FromResponse(response));
+                _cached.Status = "completed";
+                _cached.Reason = $"live-{kind}";
+                _cached.LastError = null;
+                _timing.LastCompletedUtc = DateTimeOffset.UtcNow;
+                return;
+            }
+
+            if (invalidateCachedBucket)
+            {
+                ClearCachedBucket(severity);
+                _cached.Status = "completed";
+                _cached.Reason = $"filtered-live-{kind}";
+                _cached.LastError = null;
+                _timing.LastCompletedUtc = DateTimeOffset.UtcNow;
+            }
+        }
+    }
+
     private DiagnosticBucket? GetCachedBucket(string severity, out string kind)
     {
         if (string.Equals(severity, "Error", StringComparison.OrdinalIgnoreCase))
@@ -137,6 +170,50 @@ internal sealed class DocumentDiagnosticsCoordinator(BridgeConnection bridge)
             ? _cached.Messages
             : null;
     }
+
+    private void SetCachedBucket(string severity, DiagnosticBucket bucket)
+    {
+        if (string.Equals(severity, "Error", StringComparison.OrdinalIgnoreCase))
+        {
+            _cached.Errors = bucket;
+            return;
+        }
+
+        if (string.Equals(severity, "Warning", StringComparison.OrdinalIgnoreCase))
+        {
+            _cached.Warnings = bucket;
+            return;
+        }
+
+        if (string.Equals(severity, "Message", StringComparison.OrdinalIgnoreCase))
+        {
+            _cached.Messages = bucket;
+        }
+    }
+
+    private void ClearCachedBucket(string severity)
+    {
+        if (string.Equals(severity, "Error", StringComparison.OrdinalIgnoreCase))
+        {
+            _cached.Errors = null;
+            return;
+        }
+
+        if (string.Equals(severity, "Warning", StringComparison.OrdinalIgnoreCase))
+        {
+            _cached.Warnings = null;
+            return;
+        }
+
+        if (string.Equals(severity, "Message", StringComparison.OrdinalIgnoreCase))
+        {
+            _cached.Messages = null;
+        }
+    }
+
+    private static bool IsStaleDiagnosticsResponse(JsonObject response)
+        => response["Cache"] is JsonObject cache
+            && cache["mayBeStale"]?.GetValue<bool>() == true;
 
     private async Task RefreshLoopAsync()
     {
@@ -210,10 +287,47 @@ internal sealed class DocumentDiagnosticsCoordinator(BridgeConnection bridge)
             return false;
         }
 
+        if (LooksLikeBridgeHandleFilter(GetOptionalString(args, "file"))
+            || LooksLikeBridgeHandleFilter(GetOptionalString(args, "path")))
+        {
+            return false;
+        }
+
         // quick and wait_for_intellisense are timing hints. Content filters are
         // applied by DiagnosticCollection before the tool boundary serializes JSON.
         return (args?["severity"] is null
             || string.Equals(requestedSeverity, expectedSeverity, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool LooksLikeBridgeHandleFilter(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        string trimmed = value.Trim();
+        if (trimmed.Length < 3 || trimmed[1] != ':' || !char.IsLetter(trimmed[0]))
+        {
+            return false;
+        }
+
+        for (int i = 2; i < trimmed.Length; i++)
+        {
+            if (!char.IsDigit(trimmed[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string? GetOptionalString(JsonObject? args, string key)
+    {
+        return args?[key] is JsonValue value && value.TryGetValue(out string? text)
+            ? text
+            : null;
     }
 
     private static bool WantsPassiveDiagnosticsRead(JsonObject? args)

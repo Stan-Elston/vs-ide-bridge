@@ -71,7 +71,9 @@ public sealed class SearchResultRow
             }
 
             Project = FirstString(obj, "project", "projectName", "projectUniqueName");
-            Kind = FirstString(obj, "kind");
+            // Text-source symbol hits carry "inferredKind" instead of "kind"; without the
+            // fallback the kind filter/sort/group sees an empty string and drops every row.
+            Kind = FirstString(obj, "kind", "inferredKind");
             Source = FirstString(obj, "source", "tool");
             Message = FirstString(obj, "message");
             Signature = FirstString(obj, SearchJsonNames.Signature);

@@ -118,6 +118,32 @@ public sealed class DiagnosticCollectionTests
     }
 
     [Fact]
+    public void VisualStudioAnalyzerRowsAreMarkedAnalyzerLimited()
+    {
+        JsonObject bucket = new()
+        {
+            [DiagnosticJsonNames.Rows] = new JsonArray
+            {
+                new JsonObject
+                {
+                    [DiagnosticJsonNames.Severity] = "Message",
+                    [DiagnosticJsonNames.Code] = "VCR003",
+                    [DiagnosticJsonNames.File] = "src/Widget.cpp",
+                    [DiagnosticJsonNames.Message] = "Function definition missing.",
+                },
+            },
+        };
+
+        JsonObject result = DiagnosticCollection.FromJsonObject(bucket)
+            .ToJsonObject(new(DefaultChunkSize, FirstChunkIndex, null, false, null, null, null, null, null, null), bucket);
+        JsonObject row = Assert.IsType<JsonObject>(Assert.IsType<JsonArray>(result[DiagnosticJsonNames.Rows]).Single());
+
+        Assert.True(row["analyzerLimited"]!.GetValue<bool>());
+        Assert.Equal("visual-studio-analyzer-limited", row["authority"]!.GetValue<string>());
+        Assert.Contains("modern C++", row["guidance"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void FilteringTruncatedSourceReportsKnownMatchesOnly()
     {
         JsonObject bucket = CreateBucket();
@@ -211,6 +237,76 @@ public sealed class DiagnosticCollectionTests
 
         JsonArray groups = Assert.IsType<JsonArray>(result[DiagnosticJsonNames.Groups]);
         Assert.Contains(groups.OfType<JsonObject>(), group => group[DiagnosticJsonNames.Key]?.GetValue<string>() == "BP1044");
+    }
+
+    [Fact]
+    public void GroupedReadWithFiniteChunkSizeGroupsAllRows()
+    {
+        DiagnosticCollection collection = DiagnosticCollection.FromJsonObject(CreateBucket());
+        JsonObject result = collection.ToJsonObject(new(SingleRowChunkSize, FirstChunkIndex, null, false, null, null, null, null, null, "code"), CreateBucket());
+
+        // Grouping must cover every filtered row; a finite chunk_size only paginates the groups.
+        Assert.Equal(DiagnosticRowCount, result["groupCount"]!.GetValue<int>());
+        Assert.Equal(DiagnosticRowCount, result["diagnosticCount"]!.GetValue<int>());
+        Assert.Equal(DiagnosticRowCount, result[DiagnosticJsonNames.ChunkCount]!.GetValue<int>());
+        JsonArray groups = Assert.IsType<JsonArray>(result[DiagnosticJsonNames.Groups]);
+        Assert.Single(groups);
+    }
+
+    [Fact]
+    public void GroupedWriteFromTruncatedPayloadKeepsUpstreamGroups()
+    {
+        // Simulates a payload whose rows array was already row-chunked (1 of 10 rows) while
+        // its groups were computed upstream over the full filtered set. Regrouping the chunk
+        // would shrink every count to the current chunk; the upstream summary must win.
+        JsonObject truncatedBucket = CreateBucket();
+        JsonArray rows = (JsonArray)truncatedBucket[DiagnosticJsonNames.Rows]!;
+        while (rows.Count > 1)
+        {
+            rows.RemoveAt(rows.Count - 1);
+        }
+
+        truncatedBucket[DiagnosticJsonNames.Count] = 1;
+        truncatedBucket[DiagnosticJsonNames.TotalCount] = 10;
+        truncatedBucket[DiagnosticJsonNames.Groups] = new JsonArray
+        {
+            new JsonObject { [DiagnosticJsonNames.Key] = "BP1002", [DiagnosticJsonNames.Count] = 7 },
+            new JsonObject { [DiagnosticJsonNames.Key] = "C4244", [DiagnosticJsonNames.Count] = 3 },
+        };
+
+        JsonObject result = DiagnosticCollection.FromJsonObject(truncatedBucket)
+            .ToJsonObject(new(DefaultChunkSize, FirstChunkIndex, null, false, null, null, null, null, null, "code"), truncatedBucket);
+
+        JsonArray groups = Assert.IsType<JsonArray>(result[DiagnosticJsonNames.Groups]);
+        Assert.Equal(2, groups.Count);
+        Assert.Equal("BP1002", groups[0]![DiagnosticJsonNames.Key]!.GetValue<string>());
+        Assert.Equal(7, groups[0]![DiagnosticJsonNames.Count]!.GetValue<int>());
+        Assert.Equal(2, result["groupCount"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void GroupedBridgeCommandArgsRequestFullRowSet()
+    {
+        JsonObject groupedArgs = new()
+        {
+            ["group_by"] = "code",
+            ["chunk_size"] = 20,
+            ["chunk_index"] = 1,
+        };
+        string grouped = ToolCatalog.BuildDiagnosticRowsCommandArgs(groupedArgs, "warning");
+        Assert.Contains("--chunk-size", grouped);
+        Assert.DoesNotContain("20", grouped);
+        Assert.DoesNotContain("--chunk-index", grouped);
+
+        JsonObject ungroupedArgs = new()
+        {
+            ["chunk_size"] = 20,
+            ["chunk_index"] = 1,
+        };
+        string ungrouped = ToolCatalog.BuildDiagnosticRowsCommandArgs(ungroupedArgs, "warning");
+        Assert.Contains("--chunk-size", ungrouped);
+        Assert.Contains("20", ungrouped);
+        Assert.Contains("--chunk-index", ungrouped);
     }
 
     private static string GetSortValue(JsonObject result, string sortBy)

@@ -28,7 +28,7 @@ internal static partial class ToolCatalog
             "Examples: \"math.sqrt(2)\", \"round(math.pi, 10)\", \"statistics.mean([1.5, 2.3, 4.8])\", " +
             "\"fractions.Fraction(1,3) + fractions.Fraction(1,6)\", \"math.factorial(20)\".",
             ObjectSchema(
-                Req("expression", "Python expression to evaluate. Do not use import statements — math, statistics, decimal, and fractions are already available as globals."),
+                Req("expression", "Python expression to evaluate. Full builtins are available and import works; math, statistics, decimal, fractions, re, itertools, and collections are pre-imported as globals."),
                 Opt(Path, "Optional interpreter path. Defaults to the active interpreter, managed runtime, or first discovered Python.")),
             Python,
             async (id, args, bridge) =>
@@ -43,10 +43,11 @@ internal static partial class ToolCatalog
 
         yield return new("python_exec",
             "Execute a multi-line Python snippet for calculations and data transforms. " +
-            "Do NOT use import statements — math, statistics, decimal, and fractions are pre-imported as globals. " +
+            "Full builtins are available and import works; math, statistics, decimal, fractions, re, itertools, and collections are pre-imported as globals. " +
             "Assign to a variable named result to get it back as structured JSON alongside any print output.",
             ObjectSchema(
-                Req("code", "Multi-line Python snippet. Do not use import statements — math, statistics, decimal, and fractions are already in scope. Assign to \"result\" to return a value as structured JSON."),
+                Req("code", "Multi-line Python snippet. Full builtins are available and import works; math, statistics, decimal, fractions, re, itertools, and collections are already in scope. " +
+                    "Assign to \"result\" to return a value as structured JSON."),
                 Opt(Path, "Optional interpreter path. Defaults to the active interpreter, managed runtime, or first discovered Python.")),
             Python,
             async (id, args, bridge) =>
@@ -256,13 +257,15 @@ internal static partial class ToolCatalog
         JsonNode? id, string python, string expression, int timeoutMs)
     {
         string script =
-            "import json, math, statistics, decimal, fractions, base64, sys; " +
+            "import json, math, statistics, decimal, fractions, base64, sys, re, itertools, collections; " +
             "expr = base64.b64decode(sys.stdin.read()).decode('utf-8'); " +
-            "safe = {'abs': abs, 'min': min, 'max': max, 'sum': sum, 'round': round, 'len': len}; " +
-            "globals_dict = {'__builtins__': safe, 'math': math, 'statistics': statistics, 'decimal': decimal, 'fractions': fractions}; " +
-            "value = eval(expr, globals_dict, {}); " +
+            // Full builtins (and import) are available: omit '__builtins__' so Python injects the real
+            // builtins module into globals. The scratchpad already runs a real Python subprocess behind
+            // python_exec approval, so a restricted builtins allowlist added friction without real safety.
+            "ns = {'math': math, 'statistics': statistics, 'decimal': decimal, 'fractions': fractions, 're': re, 'itertools': itertools, 'collections': collections}; " +
+            "value = eval(expr, ns); " +
             "payload = {'expression': expr, 'type': type(value).__name__, 'repr': repr(value)}; " +
-            "json.dumps(value); payload['json'] = value; " +
+            "payload['json'] = json.loads(json.dumps(value, default=str)); " +
             "print(json.dumps(payload))";
 
         string encodedExpression = Convert.ToBase64String(Encoding.UTF8.GetBytes(expression));
@@ -274,21 +277,25 @@ internal static partial class ToolCatalog
         JsonNode? id, string python, string code, int timeoutMs)
     {
         string script =
-            "import json, math, statistics, decimal, fractions, base64, io, contextlib, sys\n" +
+            "import json, math, statistics, decimal, fractions, base64, io, contextlib, sys, re, itertools, collections\n" +
             "source = base64.b64decode(sys.stdin.read()).decode('utf-8')\n" +
-            "safe = {'abs': abs, 'min': min, 'max': max, 'sum': sum, 'round': round, 'len': len, 'range': range, 'print': print}\n" +
-            "globals_dict = {'__builtins__': safe, 'math': math, 'statistics': statistics, 'decimal': decimal, 'fractions': fractions}\n" +
-            "locals_dict = {}\n" +
+            // Full builtins (and import) are available: omit '__builtins__' so Python injects the real
+            // builtins module into globals_dict. The scratchpad runs a real Python subprocess behind
+            // python_exec approval, so a restricted builtins allowlist added friction without real safety.
+            // Single namespace for globals AND locals: exec(source, ns) runs the snippet as if at module
+            // scope, so top-level def/class/var names land in the same dict that functions resolve globals
+            // against. Passing separate globals/locals dicts makes a helper defined in the snippet fail with
+            // NameError on any other top-level name (functions look up __globals__, not the exec locals).
+            "ns = {'math': math, 'statistics': statistics, 'decimal': decimal, 'fractions': fractions, 're': re, 'itertools': itertools, 'collections': collections}\n" +
             "stdout_buffer = io.StringIO()\n" +
             "with contextlib.redirect_stdout(stdout_buffer):\n" +
-            "    exec(source, globals_dict, locals_dict)\n" +
-            "payload = {'stdout': stdout_buffer.getvalue(), 'hasResult': 'result' in locals_dict}\n" +
-            "if 'result' in locals_dict:\n" +
-            "    value = locals_dict['result']\n" +
+            "    exec(source, ns)\n" +
+            "payload = {'stdout': stdout_buffer.getvalue(), 'hasResult': 'result' in ns}\n" +
+            "if 'result' in ns:\n" +
+            "    value = ns['result']\n" +
             "    payload['resultType'] = type(value).__name__\n" +
             "    payload['resultRepr'] = repr(value)\n" +
-            "    json.dumps(value)\n" +
-            "    payload['resultJson'] = value\n" +
+            "    payload['resultJson'] = json.loads(json.dumps(value, default=str))\n" +
             "print(json.dumps(payload))";
 
         string encodedCode = Convert.ToBase64String(Encoding.UTF8.GetBytes(code));

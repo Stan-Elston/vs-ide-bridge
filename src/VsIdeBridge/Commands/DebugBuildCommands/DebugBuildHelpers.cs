@@ -10,15 +10,15 @@ namespace VsIdeBridge.Commands;
 
 internal static partial class DebugBuildCommands
 {
-    private static ErrorListQuery CreateErrorListQuery(CommandArguments args, string? defaultSeverity = null)
+    private static ErrorListQuery CreateErrorListQuery(IdeCommandContext context, CommandArguments args, string? defaultSeverity = null)
     {
         return new ErrorListQuery
         {
             Severity      = args.GetString("severity") ?? defaultSeverity,
             Code          = args.GetString("code"),
             Project       = args.GetString("project"),
-            Path          = args.GetString("path"),
-            File          = args.GetString(FileArgument),
+            Path          = ResolveDiagnosticPathFilter(context, args.GetString("path")),
+            File          = ResolveDiagnosticPathFilter(context, args.GetString(FileArgument)),
             Text          = args.GetString("text"),
             // Try CLI form (group-by) first, then MCP JSON form (group_by).
             GroupBy       = args.GetString("group-by") ?? args.GetString(GroupByJsonArgument),
@@ -28,6 +28,16 @@ internal static partial class DebugBuildCommands
             SortBy        = args.GetString(SortByArgument)        ?? args.GetString(SortByJsonArgument),
             SortDirection = args.GetString(SortDirectionArgument) ?? args.GetString(SortDirectionJsonArgument),
         };
+    }
+
+    private static string? ResolveDiagnosticPathFilter(IdeCommandContext context, string? filter)
+    {
+        if (string.IsNullOrWhiteSpace(filter) || !HandleService.IsHandle(filter))
+        {
+            return filter;
+        }
+
+        return context.Handles.ResolveFilePath(filter!);
     }
 
     // Max is the legacy per-request limit (--max); ChunkSize is now separate.
@@ -87,11 +97,9 @@ internal static partial class DebugBuildCommands
     }
 
     /// <summary>
-    /// Builds a compact one-line summary that always shows counts for all three severity
-    /// levels regardless of which severity was filtered. Models read Summary first, so
-    /// embedding the full picture here prevents them from declaring victory on 0 errors
-    /// while warnings or messages remain.
-    /// Example: "0 errors � 1 warning � 2 messages � fix all before building."
+    /// Builds a compact one-line summary. Unfiltered reads lead with whole Error List totals so
+    /// models do not declare victory on 0 errors while warnings/messages remain. Content-filtered
+    /// reads lead with the filtered population and label whole-list counts separately.
     /// </summary>
     internal static string BuildDiagnosticsCountSummary(JObject result)
     {
@@ -99,11 +107,58 @@ internal static partial class DebugBuildCommands
         int errors   = total?["Error"]?.Value<int>()   ?? 0;
         int warnings = total?["Warning"]?.Value<int>() ?? 0;
         int messages = total?["Message"]?.Value<int>() ?? 0;
-        string counts = $"{errors} error(s) � {warnings} warning(s) � {messages} message(s)";
-        return errors == 0 && warnings == 0 && messages == 0
-            ? $"{counts} � clean."
-            : $"{counts} � fix all before building.";
+        string counts = $"{errors} error(s), {warnings} warning(s), {messages} message(s)";
+
+        if (HasDiagnosticContentFilter(result))
+        {
+            string severity = NormalizeSummarySeverity(result["filter"]?["severity"]?.Value<string>());
+            int filteredCount = result["totalCount"]?.Value<int>() ?? result["count"]?.Value<int>() ?? 0;
+            string filteredCounts = $"{filteredCount} {severity.ToLowerInvariant()}(s) for current filter";
+            string globalCounts = $"whole Error List: {counts}";
+            return severity switch
+            {
+                "Error" when filteredCount > 0 => $"{filteredCounts} - fix filtered errors before building; {globalCounts}.",
+                "Error" => $"{filteredCounts} - no errors in this filtered set; {globalCounts}.",
+                _ when filteredCount > 0 => $"{filteredCounts} - filtered diagnostics remain; {globalCounts}.",
+                _ => $"{filteredCounts} - filtered set is clean; {globalCounts}.",
+            };
+        }
+
+        if (errors > 0)
+        {
+            return $"{counts} - fix errors before building.";
+        }
+
+        // Warnings/messages don't block the build, but don't let the model declare victory.
+        return warnings == 0 && messages == 0
+            ? $"{counts} - clean."
+            : $"{counts} - no errors; the build can succeed, but warnings/messages remain to fix.";
     }
+
+    private static string NormalizeSummarySeverity(string? severity)
+    {
+        if (string.Equals(severity, "Warning", StringComparison.OrdinalIgnoreCase)) return "Warning";
+        if (string.Equals(severity, "Message", StringComparison.OrdinalIgnoreCase)) return "Message";
+        if (string.Equals(severity, "Error", StringComparison.OrdinalIgnoreCase)) return "Error";
+        return "diagnostic";
+    }
+
+    private static bool HasDiagnosticContentFilter(JObject result)
+    {
+        if (result["filter"] is not JObject filter)
+        {
+            return false;
+        }
+
+        return HasNonEmptyFilterValue(filter, "code")
+            || HasNonEmptyFilterValue(filter, "project")
+            || HasNonEmptyFilterValue(filter, "path")
+            || HasNonEmptyFilterValue(filter, FileArgument)
+            || HasNonEmptyFilterValue(filter, "text");
+    }
+
+    private static bool HasNonEmptyFilterValue(JObject filter, string key)
+        => !string.IsNullOrWhiteSpace(filter[key]?.Value<string>());
 
     /// <summary>
     /// Produces bridge-level advisory warnings pointing to severity categories that were
@@ -115,6 +170,7 @@ internal static partial class DebugBuildCommands
         if (counts is null)
             return [];
 
+        bool contentFiltered = HasDiagnosticContentFilter(result);
         JArray advisories = [];
         foreach (string severity in otherSeverities)
         {
@@ -128,7 +184,8 @@ internal static partial class DebugBuildCommands
                     "Message" => "run warnings with severity=Message",
                     _ => $"run {severity.ToLowerInvariant()}",
                 };
-                advisories.Add($"Also found {count} {severity.ToLowerInvariant()}(s) � {callHint}.");
+                string prefix = contentFiltered ? "Whole Error List has" : "Also found";
+                advisories.Add($"{prefix} {count} {severity.ToLowerInvariant()}(s) - {callHint}.");
             }
         }
         return advisories;

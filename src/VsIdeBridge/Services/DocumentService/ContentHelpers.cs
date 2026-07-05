@@ -83,9 +83,13 @@ internal sealed partial class DocumentService
             }
 
             bool contentChanged = !string.Equals(originalContent, finalContent, StringComparison.Ordinal);
-            if (saveChanges && window.Document is not null)
+            if (saveChanges)
             {
-                window.Document.Save();
+                // The window reference can lose its Document after a large buffer replace;
+                // re-resolve instead of silently skipping a requested save (issue 17 left
+                // a mutated document unsaved while the result still claimed saved:true).
+                Document? documentToSave = window.Document ?? TryFindOpenDocumentByPath(dte, normalizedPath) ?? document;
+                documentToSave?.Save();
             }
 
             return BuildWriteResult(window, normalizedPath, content, usedEditorBuffer, contentChanged,
@@ -261,7 +265,7 @@ internal sealed partial class DocumentService
             ["editorBacked"] = usedEditorBuffer,
             ["verified"] = true,
             ["contentChanged"] = contentChanged,
-            ["saved"] = window.Document?.Saved ?? saveChanges,
+            ["saved"] = (window.Document ?? TryFindOpenDocumentByPath(dte, normalizedPath))?.Saved ?? saveChanges,
             ["line"] = Math.Max(1, line),
             ["column"] = Math.Max(1, column),
             ["windowCaption"] = window.Caption,
@@ -373,7 +377,7 @@ internal sealed partial class DocumentService
 
         if (!string.IsNullOrWhiteSpace(filePath))
         {
-            string normalized = PathNormalization.NormalizeFilePath(filePath);
+            string normalized = ResolveDocumentPath(dte, filePath, allowDiskFallback: false);
             Document document = TryFindOpenDocumentByPath(dte, normalized) ?? throw new CommandErrorException(DocumentNotFoundCode, $"No open document matching path: {filePath}");
             document.Save();
             string? path = TryGetDocumentFullName(document);

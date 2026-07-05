@@ -19,6 +19,25 @@ internal sealed class OutputWindowService
     private const int OutputReadAttemptCount = 2;
     private const string BuildPaneName = "Build";
 
+    /// <summary>
+    /// Best-effort read of the Build pane's full text for post-build error parsing.
+    /// Returns null when the pane does not exist yet (no build has run) or reading fails.
+    /// </summary>
+    public async Task<string?> TryReadBuildPaneTextAsync(DTE2 dte)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+        try
+        {
+            OutputWindowPane pane = dte.ToolWindows.OutputWindow.OutputWindowPanes.Item(BuildPaneName);
+            return ReadOutputPaneText(dte, pane, activate: false);
+        }
+        catch (Exception ex) when (ex is not null) // pane missing before the first build, or COM read failure
+        {
+            Debug.WriteLine(ex);
+            return null;
+        }
+    }
+
     public async Task<JObject> ReadOutputWindowAsync(
         DTE2 dte,
         string? requestedPane,

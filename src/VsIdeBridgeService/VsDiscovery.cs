@@ -312,6 +312,7 @@ internal static class VsDiscovery
             Label = GetInstanceLabel(obj),
             Source = source,
             StartedAtUtc = obj["startedAtUtc"]?.GetValue<string>(),
+            Version = obj["version"]?.GetValue<string>(),
             DiscoveryFile = source,
             LastWriteTimeUtc = DateTime.TryParse(
                 obj["lastWriteTimeUtc"]?.GetValue<string>(), out DateTime dt)
@@ -518,6 +519,16 @@ internal static class VsDiscovery
                 return false;
             }
 
+            // Window handles are session-scoped: when the Windows service (session 0)
+            // probes an interactive VS process, MainWindowHandle is always zero, so the
+            // zombie-window heuristic below would misread every real instance as dead
+            // and delete its discovery file. Cross-session, a running process is the
+            // strongest signal available - treat it as live.
+            if (!IsInCurrentSession(process))
+            {
+                return true;
+            }
+
             if (HasUsableMainWindow(process))
             {
                 return true;
@@ -575,6 +586,35 @@ internal static class VsDiscovery
         catch
         {
             return false;
+        }
+    }
+
+    private static readonly int CurrentSessionId = GetCurrentSessionId();
+
+    private static bool IsInCurrentSession(Process process)
+    {
+        try
+        {
+            return process.SessionId == CurrentSessionId;
+        }
+        catch
+        {
+            // Session unknown: assume cross-session so the window heuristic is skipped
+            // rather than misclassifying a live instance as dead.
+            return false;
+        }
+    }
+
+    private static int GetCurrentSessionId()
+    {
+        try
+        {
+            using Process current = Process.GetCurrentProcess();
+            return current.SessionId;
+        }
+        catch
+        {
+            return -1;
         }
     }
 

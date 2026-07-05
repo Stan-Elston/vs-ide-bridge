@@ -27,23 +27,50 @@ internal sealed class VsPipeClient : IAsyncDisposable
         _gate = gate;
     }
 
+    // Connecting to a live pipe is fast; waiting the full command timeout on a dead pipe
+    // (VS restarted, new pid) only delays the stale-binding recovery in BridgeConnection.
+    private const int MaxConnectTimeoutMs = 10_000;
+
     public static async Task<VsPipeClient> CreateAsync(string pipeName, int timeoutMs, int gateTimeoutMs)
     {
         int resolvedTimeoutMs = Math.Max(1_000, timeoutMs);
-        FileStream gate = await AcquireGateAsync(pipeName, Math.Max(250, gateTimeoutMs)).ConfigureAwait(false);
+        FileStream? gate = await AcquireGateAsync(pipeName, Math.Max(250, gateTimeoutMs)).ConfigureAwait(false);
 
-        NamedPipeClientStream pipe = new(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-        using CancellationTokenSource cts = new(resolvedTimeoutMs);
-        await pipe.ConnectAsync(cts.Token).ConfigureAwait(false);
-
-        StreamReader reader = new(pipe, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: false, leaveOpen: true);
-        StreamWriter writer = new(pipe, new UTF8Encoding(false), leaveOpen: true)
+        NamedPipeClientStream? pipe = null;
+        try
         {
-            AutoFlush = true,
-            NewLine = "\n",
-        };
+            pipe = new(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            int connectTimeoutMs = Math.Min(resolvedTimeoutMs, MaxConnectTimeoutMs);
+            using CancellationTokenSource cts = new(connectTimeoutMs);
+            try
+            {
+                await pipe.ConnectAsync(cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw new BridgeConnectTimeoutException(pipeName, connectTimeoutMs);
+            }
 
-        return new VsPipeClient(pipe, reader, writer, resolvedTimeoutMs, gate);
+            StreamReader reader = new(pipe, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: false, leaveOpen: true);
+            StreamWriter writer = new(pipe, new UTF8Encoding(false), leaveOpen: true)
+            {
+                AutoFlush = true,
+                NewLine = "\n",
+            };
+
+            VsPipeClient client = new(pipe, reader, writer, resolvedTimeoutMs, gate);
+            pipe = null; // ownership transferred to the client
+            gate = null;
+            return client;
+        }
+        finally
+        {
+            // Reached with non-null locals only when construction failed. The gate lock
+            // file must not outlive a failed connect, or every following call fails with
+            // BridgeBusyException until the GC finalizes the leaked stream.
+            pipe?.Dispose();
+            gate?.Dispose();
+        }
     }
 
     public async Task<JsonObject> SendAsync(JsonObject payload)
@@ -99,6 +126,12 @@ internal sealed class VsPipeClient : IAsyncDisposable
 
 internal sealed class BridgeBusyException(string pipeName, int gateTimeoutMs)
     : BridgeException($"Bridge pipe '{pipeName}' is busy with another request. Try again soon or avoid overlapping bridge calls. Waited {gateTimeoutMs} ms for exclusive access.");
+
+// Thrown when the pipe cannot be connected at all - the request never reached VS, and the
+// cached instance is most likely stale (VS restarted or closed). BridgeConnection evicts the
+// cached instance and retries once with fresh discovery on this exception.
+internal sealed class BridgeConnectTimeoutException(string pipeName, int timeoutMs)
+    : TimeoutException($"Timed out connecting to VS bridge pipe '{pipeName}' after {timeoutMs} ms. The pipe is likely stale (VS restarted or closed).");
 
 // Thrown for logical bridge errors (not I/O or timeout) so callers can distinguish error types.
 internal class BridgeException(string message) : Exception(message);

@@ -14,4 +14,34 @@ internal static class BridgeConnectionDefaults
     public const int CommError = -32003;
     public const int UnboundError = -32004;
     public const int SessionLostError = -32005;
+
+    public static int GetCommandTimeoutMs(BridgeConnection.ToolTimeoutProfile timeoutProfile, int? timeoutOverrideMs)
+    {
+        return timeoutOverrideMs ?? timeoutProfile switch
+        {
+            BridgeConnection.ToolTimeoutProfile.Fast => FastTimeoutMs,
+            BridgeConnection.ToolTimeoutProfile.Interactive => InteractiveTimeoutMs,
+            BridgeConnection.ToolTimeoutProfile.Heavy => HeavyTimeoutMs,
+            BridgeConnection.ToolTimeoutProfile.BuildWait => BuildWaitTimeoutMs,
+            _ => InteractiveTimeoutMs,
+        };
+    }
+
+    public static int GetPipeGateTimeoutMs(BridgeConnection.ToolTimeoutProfile timeoutProfile, int? timeoutOverrideMs)
+    {
+        int pipeGateTimeoutMs = timeoutProfile switch
+        {
+            BridgeConnection.ToolTimeoutProfile.Fast => FastPipeGateTimeoutMs,
+            BridgeConnection.ToolTimeoutProfile.Interactive => InteractivePipeGateTimeoutMs,
+            BridgeConnection.ToolTimeoutProfile.Heavy or BridgeConnection.ToolTimeoutProfile.BuildWait => HeavyPipeGateTimeoutMs,
+            _ => InteractivePipeGateTimeoutMs,
+        };
+
+        return timeoutOverrideMs is int overrideMs
+            ? Math.Min(pipeGateTimeoutMs, overrideMs)
+            : pipeGateTimeoutMs;
+    }
+
+    public static bool ShouldRetry(BridgeConnection.ToolTimeoutProfile timeoutProfile)
+        => timeoutProfile != BridgeConnection.ToolTimeoutProfile.Fast;
 }

@@ -5,7 +5,7 @@ VS IDE Bridge connects your AI assistant to Visual Studio. Once connected, your 
 ## Requirements
 
 - Windows 10 or Windows 11
-- Visual Studio 2022 (17.x) or Visual Studio 2026 (18.x)
+- Visual Studio 2022 (17.14 or later) or Visual Studio 2026 (18.x) — Community, Professional, or Enterprise
 - An AI assistant with MCP support (Claude Code, Grok, Cursor, Codex, LM Studio, or any MCP-compatible client)
 
 ## Installation
@@ -172,7 +172,7 @@ You can have any number of Visual Studio windows open at the same time. The brid
 
 **When only one instance is open** the assistant binds to it automatically at the start of a session. No extra steps needed.
 
-**When more than one instance is open** the assistant will ask you which solution to work with, or you can tell it directly:
+**When more than one instance is open** the bridge rebinds to the solution it was using last time if that solution is still open; otherwise it auto-binds to the first instance it discovers and includes a warning listing the other open instances. If it picked the wrong one — or you want to be explicit up front — just tell the assistant:
 
 - *"Bind to MySolution.sln."*
 - *"Switch to the CodeMaid project."*
@@ -249,15 +249,26 @@ The bridge can run arbitrary shell commands on your machine when asked. This is 
 
 ## Building from Source
 
-Prerequisites: Visual Studio 2022 or later with the Visual Studio extension development workload.
+Prerequisites:
+
+- Visual Studio 2026 (18.x) with the **Visual Studio extension development** workload (the solution builds against the VS 2026 SDK; the produced VSIX installs on both VS 2022 17.14+ and VS 2026)
+- [Inno Setup 6](https://jrsoftware.org/isinfo.php) — download and install it separately if you want to produce the installer; it is not bundled and not needed for code-only builds
 
 ```bash
 git clone https://github.com/RenegadeRiff86/Visual-Studio-MCP
 cd Visual-Studio-MCP
-dotnet build
+scripts\build.bat Release
 ```
 
-Open `VsIdeBridge.sln` in Visual Studio to work on the extension. Build the installer with **Build → Rebuild Solution** — the post-build step runs Inno Setup automatically and produces:
+`build.bat` locates MSBuild through vswhere and rebuilds the full solution including the VSIX. (Plain `dotnet build` does not work here: the solution contains a C++ probe project that only builds under Visual Studio's MSBuild.)
+
+Open `VsIdeBridge.sln` in Visual Studio to work on the extension. To produce the installer, compile the Inno Setup script after a Release build:
+
+```bash
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\inno\vs-ide-bridge.iss
+```
+
+which writes:
 
 ```
 installer\output\vs-ide-bridge-setup-<version>.exe

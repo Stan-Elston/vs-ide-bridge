@@ -72,7 +72,9 @@ internal sealed class BuildService(ReadinessService readinessService)
             $"IDE Bridge: build {(succeeded ? "succeeded" : "failed")} in {elapsed:0}ms",
             context.CancellationToken).ConfigureAwait(true);
 
-        return CreateBuildResult(dte, solutionBuild, startedAt, operation: "build");
+        JObject buildResult = CreateBuildResult(dte, solutionBuild, startedAt, operation: "build");
+        await BuildServiceHelpers.AttachBuildOutputErrorsAsync(context, buildResult).ConfigureAwait(true);
+        return buildResult;
     }
 
     public async Task<JObject> RebuildSolutionAsync(IdeCommandContext context, int timeoutMilliseconds, string? configuration, string? platform)
@@ -98,7 +100,9 @@ internal sealed class BuildService(ReadinessService readinessService)
             $"IDE Bridge: rebuild {(succeeded ? "succeeded" : "failed")} in {elapsed:0}ms",
             context.CancellationToken).ConfigureAwait(true);
 
-        return CreateBuildResult(dte, solutionBuild, startedAt, operation: "rebuild");
+        JObject rebuildResult = CreateBuildResult(dte, solutionBuild, startedAt, operation: "rebuild");
+        await BuildServiceHelpers.AttachBuildOutputErrorsAsync(context, rebuildResult).ConfigureAwait(true);
+        return rebuildResult;
     }
 
     public async Task<JObject> GetBuildStateAsync(DTE2 dte)

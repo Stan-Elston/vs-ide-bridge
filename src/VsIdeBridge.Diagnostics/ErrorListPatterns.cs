@@ -37,7 +37,9 @@ internal static partial class ErrorListPatterns
     [GeneratedRegex(@"^\s*using\s+namespace\s+([\w:]+)\s*;", RegexOptions.Multiline)]
     public static partial Regex UsingNamespacePattern();
 
-    [GeneratedRegex(@"\((?:const\s+)?(?:unsigned\s+)?(?:int|long|short|char|float|double|size_t|uint\d+_t|int\d+_t|void)\s*\*?\)\s*[a-zA-Z_\(]")]
+    // The trailing lookahead rejects declaration contexts such as "size_t vertexCount(size_t) const",
+    // where "(size_t) c" is an unnamed parameter followed by a qualifier, not a cast.
+    [GeneratedRegex(@"\((?:const\s+)?(?:unsigned\s+)?(?:int|long|short|char|float|double|size_t|uint\d+_t|int\d+_t|void)\s*\*?\)\s*(?!(?:const|noexcept|override|final)\b)[a-zA-Z_\(]")]
     public static partial Regex CStyleCastPattern();
 
     [GeneratedRegex(@"^\s*except\s*:", RegexOptions.Multiline)]

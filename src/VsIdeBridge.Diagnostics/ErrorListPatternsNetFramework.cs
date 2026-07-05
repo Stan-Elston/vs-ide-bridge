@@ -43,7 +43,9 @@ internal static partial class ErrorListPatterns
     private static readonly Regex _usingNamespacePattern = new(@"^\s*using\s+namespace\s+([\w:]+)\s*;", RegexOptions.Compiled | RegexOptions.Multiline);
     public static Regex UsingNamespacePattern() { return _usingNamespacePattern; }
 
-    private static readonly Regex _cStyleCastPattern = new(@"\((?:const\s+)?(?:unsigned\s+)?(?:int|long|short|char|float|double|size_t|uint\d+_t|int\d+_t|void)\s*\*?\)\s*[a-zA-Z_\(]", RegexOptions.Compiled);
+    // The trailing lookahead rejects declaration contexts such as "size_t vertexCount(size_t) const",
+    // where "(size_t) c" is an unnamed parameter followed by a qualifier, not a cast.
+    private static readonly Regex _cStyleCastPattern = new(@"\((?:const\s+)?(?:unsigned\s+)?(?:int|long|short|char|float|double|size_t|uint\d+_t|int\d+_t|void)\s*\*?\)\s*(?!(?:const|noexcept|override|final)\b)[a-zA-Z_\(]", RegexOptions.Compiled);
     public static Regex CStyleCastPattern() { return _cStyleCastPattern; }
 
     private static readonly Regex _bareExceptPattern = new(@"^\s*except\s*:", RegexOptions.Compiled | RegexOptions.Multiline);

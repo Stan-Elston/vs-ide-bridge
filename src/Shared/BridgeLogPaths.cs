@@ -89,7 +89,7 @@ public static class BridgeLogPaths
                 return;
             string legacyDir = Path.Combine(commonAppData, ProductDirectoryName, LogsDirectoryName);
             if (string.Equals(legacyDir, currentLogDir, StringComparison.OrdinalIgnoreCase))
-                return;  // already writing to this location — nothing to clean
+                return;  // already writing to this location - nothing to clean
             if (!Directory.Exists(legacyDir))
                 return;
             foreach (string file in Directory.GetFiles(legacyDir, "vs-ide-bridge-*.log"))

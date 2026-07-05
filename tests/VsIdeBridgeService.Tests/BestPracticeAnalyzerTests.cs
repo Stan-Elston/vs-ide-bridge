@@ -6,6 +6,19 @@ namespace VsIdeBridgeService.Tests;
 
 public sealed class BestPracticeAnalyzerTests
 {
+    private const string SingleLetterFixtureName = "q";
+    private const string VagueFixtureName = "data";
+
+    public static TheoryData<string, string> PoorNamingIgnoredSnippets()
+    {
+        return new TheoryData<string, string>
+        {
+            { "sample.cs", "const string snippet = \"int " + SingleLetterFixtureName + " = 1;\";\n" },
+            { "sample.cs", "const string snippet = \"var " + VagueFixtureName + " = ReadFixture();\";\n" },
+            { "sample.cs", "// int " + SingleLetterFixtureName + " = 1;\nint descriptiveName = 1;\n" },
+        };
+    }
+
     [Theory]
     [InlineData("sample.cs", "/// version 2\n// version 2\n/* version 2\nversion 2 */\nint value = 7;\n")]
     [InlineData("sample.cpp", "/* version 2\nversion 2\nversion 2\nversion 2 */\nint value = 7;\n")]
@@ -84,6 +97,59 @@ public sealed class BestPracticeAnalyzerTests
         Newtonsoft.Json.Linq.JObject finding =
             Assert.Single(BestPracticeAnalyzer.FindRawNew("sample.cpp", content));
         Assert.Equal("BP1022", finding["code"]?.ToString());
+    }
+
+    [Theory]
+    [InlineData("sample.hpp", "// paints the image(float) height version\nint value = 7;\n")]
+    [InlineData("sample.hpp", "/* legacy (float) height comment */\nint value = 7;\n")]
+    [InlineData("sample.cpp", "const char* msg = \"cast (int) x here\";\n")]
+    [InlineData("sample.hpp", "size_t vertexCount(size_t) const { return 3; }\n")]
+    public void FindCStyleCastsIgnoresCommentsStringsAndUnnamedParameters(string file, string content)
+    {
+        Assert.DoesNotContain(BestPracticeAnalyzer.FindCStyleCasts(file, content),
+            row => row["code"]?.ToString() == "BP1008");
+    }
+
+    [Fact]
+    public void FindCStyleCastsStillReportsRealCast()
+    {
+        string content = "double density = (float)value;\n";
+
+        Newtonsoft.Json.Linq.JObject finding =
+            Assert.Single(BestPracticeAnalyzer.FindCStyleCasts("sample.cpp", content));
+        Assert.Equal("BP1008", finding["code"]?.ToString());
+        Assert.Contains("static_cast", finding["message"]?.ToString());
+    }
+
+    [Fact]
+    public void FindCStyleCastsUsesCGuidanceForCSources()
+    {
+        string content = "printf(\"%u\", (unsigned int)(len));\n";
+
+        Newtonsoft.Json.Linq.JObject finding =
+            Assert.Single(BestPracticeAnalyzer.FindCStyleCasts("exif.c", content));
+        Assert.Equal("BP1008", finding["code"]?.ToString());
+        Assert.DoesNotContain("static_cast", finding["message"]?.ToString());
+        Assert.Contains("C has no named casts", finding["message"]?.ToString());
+    }
+
+    [Theory]
+    [MemberData(nameof(PoorNamingIgnoredSnippets))]
+    public void FindPoorNamingIgnoresCommentAndStringOccurrences(string file, string content)
+    {
+        Assert.DoesNotContain(BestPracticeAnalyzer.FindPoorNaming(file, content, CodeLanguage.CSharp),
+            row => row["code"]?.ToString() == "BP1014");
+    }
+
+    [Fact]
+    public void FindPoorNamingStillReportsRealSingleLetterVariable()
+    {
+        string content = "int " + SingleLetterFixtureName + " = 1;\n";
+
+        Newtonsoft.Json.Linq.JObject finding =
+            Assert.Single(BestPracticeAnalyzer.FindPoorNaming("sample.cs", content, CodeLanguage.CSharp));
+        Assert.Equal("BP1014", finding["code"]?.ToString());
+        Assert.Equal("q", finding["symbol"]?.ToString());
     }
 
     [Fact]

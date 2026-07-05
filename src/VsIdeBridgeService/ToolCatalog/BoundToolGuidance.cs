@@ -28,7 +28,7 @@ internal static partial class ToolCatalog
     {
         return
         [
-            RecommendedTool("recommend_tools", "Ask the bridge which tools fit the current task � narrower and faster than list_tools."),
+            RecommendedTool("recommend_tools", "Ask the bridge which tools fit the current task - narrower and faster than list_tools."),
             RecommendedTool("list_tools", "List every available bridge tool when focused discovery is not enough."),
             RecommendedTool("list_tools_by_category", "Load a focused group of tools (search, git, project, debug, etc.) instead of the full catalog."),
             RecommendedTool("bridge_health", "Confirm the bound instance and rediscover bridge guidance."),
@@ -41,7 +41,7 @@ internal static partial class ToolCatalog
             RecommendedTool("read_file", "Inspect current editor-backed content before editing."),
             RecommendedTool("apply_diff", "Apply targeted in-solution edits through the live editor."),
             RecommendedTool("errors", "Read current Error List errors without starting a build."),
-            RecommendedTool("build", "Compile a project or the solution through Visual Studio � use this, not a shell build script."),
+            RecommendedTool("build", "Compile a project or the solution through Visual Studio - use this, not a shell build script."),
             RecommendedTool("build_solution", "Build the entire solution explicitly through Visual Studio."),
             RecommendedTool("rebuild_solution", "Clean then rebuild the entire solution through Visual Studio."),
             RecommendedTool("build_errors", "Build through Visual Studio and return compiler errors."),

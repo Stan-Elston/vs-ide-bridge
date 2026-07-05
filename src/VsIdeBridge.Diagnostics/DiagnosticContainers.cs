@@ -47,17 +47,62 @@ public sealed class DiagnosticRow
 
     private DiagnosticRow(JsonObject original)
     {
-        _original = original;
-        Severity = GetString(original, DiagnosticJsonNames.Severity);
-        Code = GetString(original, DiagnosticJsonNames.Code);
-        Project = GetString(original, DiagnosticJsonNames.Project);
-        File = GetString(original, DiagnosticJsonNames.File);
-        Path = GetString(original, DiagnosticJsonNames.Path);
-        Line = GetNullableInt(original, DiagnosticJsonNames.Line);
-        Column = GetNullableInt(original, DiagnosticJsonNames.Column);
-        Message = GetString(original, DiagnosticJsonNames.Message);
-        Source = GetString(original, DiagnosticJsonNames.Source);
-        Tool = GetString(original, DiagnosticJsonNames.Tool);
+        _original = ApplyAnalyzerLimitMetadata(original);
+        Severity = GetString(_original, DiagnosticJsonNames.Severity);
+        Code = GetString(_original, DiagnosticJsonNames.Code);
+        Project = GetString(_original, DiagnosticJsonNames.Project);
+        File = GetString(_original, DiagnosticJsonNames.File);
+        Path = GetString(_original, DiagnosticJsonNames.Path);
+        Line = GetNullableInt(_original, DiagnosticJsonNames.Line);
+        Column = GetNullableInt(_original, DiagnosticJsonNames.Column);
+        Message = GetString(_original, DiagnosticJsonNames.Message);
+        Source = GetString(_original, DiagnosticJsonNames.Source);
+        Tool = GetString(_original, DiagnosticJsonNames.Tool);
+    }
+
+    private static JsonObject ApplyAnalyzerLimitMetadata(JsonObject row)
+    {
+        string code = GetString(row, DiagnosticJsonNames.Code);
+        if (!IsVisualStudioAnalyzerLimitedCode(code))
+        {
+            return row;
+        }
+
+        row["analyzerLimited"] = true;
+        row["codeFamily"] = "analyzer";
+        row[DiagnosticJsonNames.Source] = string.IsNullOrWhiteSpace(GetString(row, DiagnosticJsonNames.Source))
+            ? "visual-studio-analyzer"
+            : GetString(row, DiagnosticJsonNames.Source);
+        row[DiagnosticJsonNames.Tool] = string.IsNullOrWhiteSpace(GetString(row, DiagnosticJsonNames.Tool))
+            ? "visual-studio-analyzer"
+            : GetString(row, DiagnosticJsonNames.Tool);
+        row["authority"] = "visual-studio-analyzer-limited";
+        row["guidance"] = MergeAnalyzerText(
+            GetString(row, "guidance"),
+            "Visual Studio analyzer-limited row: VCR001/VCR003 can lag or misread modern C++ constructs such as '= delete' and explicit specializations. Verify against current source and build output before editing.");
+        row["suggestedAction"] = MergeAnalyzerText(
+            GetString(row, "suggestedAction"),
+            "Treat as advisory analyzer output; refresh diagnostics or build before making semantic changes.");
+        row["llmFixPrompt"] = MergeAnalyzerText(
+            GetString(row, "llmFixPrompt"),
+            "Do not assume this VCR row is authoritative. Confirm the construct in source/build output first, especially for '= delete' and explicit specialization patterns.");
+        return row;
+    }
+
+    private static bool IsVisualStudioAnalyzerLimitedCode(string code)
+        => string.Equals(code, "VCR001", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(code, "VCR003", StringComparison.OrdinalIgnoreCase);
+
+    private static string MergeAnalyzerText(string existing, string addition)
+    {
+        if (string.IsNullOrWhiteSpace(existing))
+        {
+            return addition;
+        }
+
+        return existing.Contains(addition, StringComparison.Ordinal)
+            ? existing
+            : string.Concat(existing, " ", addition);
     }
 
     public string Severity { get; }
@@ -411,7 +456,16 @@ public sealed class DiagnosticCollection
             // sampleMessage, sampleFile, sampleCode) is all a model needs to orient itself.
             // To drill into a specific group's rows, call again with a path/code/project filter
             // and no group_by.
-            JsonArray allGroups = sorted.GroupBy(options);
+            //
+            // When this collection only holds a truncated row subset (the source payload was
+            // already row-chunked), regrouping here would shrink every group count to the
+            // current chunk. The upstream producer groups over the full filtered set, so
+            // prefer its group summary when one is present.
+            JsonArray allGroups = sorted.SourceTruncated
+                && target[DiagnosticJsonNames.Groups] is JsonArray upstreamGroups
+                && upstreamGroups.Count > 0
+                ? (JsonArray)upstreamGroups.DeepClone()
+                : sorted.GroupBy(options);
             int groupCount = allGroups.Count;
 
             // Paginate the groups themselves by chunk_size / chunk_index.
@@ -435,6 +489,12 @@ public sealed class DiagnosticCollection
 
             target[DiagnosticJsonNames.Groups] = pagedGroups;
             target[DiagnosticJsonNames.Rows] = new JsonArray();
+            // In grouped mode the generic count/pagination fields below refer to GROUP rows,
+            // not diagnostics. State both populations explicitly so 14 groups is never misread
+            // as 14 warnings (severityCounts still carries the per-severity diagnostic totals).
+            target["countScope"] = "groups";
+            target["groupCount"] = groupCount;
+            target["diagnosticCount"] = EffectiveFilteredCount();
             target[DiagnosticJsonNames.Count] = groupCount;
             target[DiagnosticJsonNames.TotalCount] = groupCount;
             target[DiagnosticJsonNames.FilteredCount] = groupCount;

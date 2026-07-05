@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
@@ -46,21 +47,13 @@ internal static partial class ToolCatalog
         JsonArray visibleInstanceItems = [];
         foreach (BridgeInstance visibleInstance in visibleInstances)
         {
-            visibleInstanceItems.Add(new JsonObject
-            {
-                ["instanceId"] = visibleInstance.InstanceId,
-                ["label"] = visibleInstance.Label,
-                [PipeNameKey] = visibleInstance.PipeName,
-                [ProcessIdKey] = visibleInstance.ProcessId,
-                [SolutionPathKey] = visibleInstance.SolutionPath ?? string.Empty,
-                ["solutionName"] = visibleInstance.SolutionName ?? string.Empty,
-                ["source"] = visibleInstance.Source,
-            });
+            visibleInstanceItems.Add(BridgeInstanceToHealthJson(visibleInstance));
         }
 
         JsonObject health = new()
         {
             ["success"] = true,
+            ["serviceVersion"] = ServiceVersion,
             ["discoveryMode"] = bridge.Mode.ToString(),
             ["currentSolutionPath"] = bridge.CurrentSolutionPath,
             ["bound"] = instance is not null,
@@ -97,15 +90,7 @@ internal static partial class ToolCatalog
         {
             health["modelGuidance"] = BoundSessionHint;
             health["recommendedTools"] = BuildBoundRecommendedTools();
-            health["instance"] = new JsonObject
-            {
-                [InstanceIdKey] = instance.InstanceId,
-                ["label"] = instance.Label,
-                [PipeNameKey] = instance.PipeName,
-                [ProcessIdKey] = instance.ProcessId,
-                [SolutionPathKey] = instance.SolutionPath ?? string.Empty,
-                ["source"] = instance.Source,
-            };
+            health["instance"] = BridgeInstanceToHealthJson(instance);
         }
 
         return BridgeResult(health);
@@ -120,7 +105,26 @@ internal static partial class ToolCatalog
         [SolutionPathKey] = instance.SolutionPath ?? string.Empty,
         ["solutionName"] = instance.SolutionName ?? string.Empty,
         ["source"] = instance.Source,
+        ["version"] = instance.Version ?? "pre-3.0.6",
     };
+
+    // Version of this MCP service process, so bridge_health always states what is running.
+    private static readonly string ServiceVersion = ResolveServiceVersion();
+
+    private static string ResolveServiceVersion()
+    {
+        string informational = typeof(ToolCatalog).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? string.Empty;
+        int metadataStart = informational.IndexOf('+');
+        if (metadataStart > 0)
+        {
+            informational = informational[..metadataStart];
+        }
+
+        return string.IsNullOrWhiteSpace(informational)
+            ? typeof(ToolCatalog).Assembly.GetName().Version?.ToString() ?? "unknown"
+            : informational;
+    }
 
     private static async Task<JsonNode> VsOpenAsync(JsonNode? id, JsonObject? args, BridgeConnection bridge)
     {

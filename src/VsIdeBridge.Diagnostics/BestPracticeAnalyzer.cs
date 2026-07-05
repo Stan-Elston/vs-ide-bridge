@@ -312,26 +312,8 @@ internal static partial class BestPracticeAnalyzer
 
     // ── BP1008: C-style cast (C++) ────────────────────────────────────────────
 
-    public static IEnumerable<JObject> FindCStyleCasts(string file, string content)
-    {
-        MatchCollection matches = CStyleCastPattern().Matches(content);
-        int findingCount = 0;
-        foreach (Match match in matches)
-        {
-            yield return DiagnosticRowFactory.CreateBestPracticeRow(
-                code: "BP1008",
-                message: $"C-style cast '{match.Value.TrimEnd()}' detected. Prefer static_cast, reinterpret_cast, or const_cast.",
-                file: file,
-                line: GetLineNumber(content, match.Index),
-                symbol: match.Value.Trim(),
-                helpUri: BP1008HelpUri);
-            findingCount++;
-            if (findingCount >= MaxSuppressionFindingsPerFile)
-            {
-                yield break;
-            }
-        }
-    }
+    // FindCStyleCasts lives in BestPracticeAnalyzerStructureRules.cs with the other
+    // comment/string-guarded rules (this file is at the BP1012 length limit).
 
     // ── BP1009: Bare except (Python) ──────────────────────────────────────────
 
@@ -501,6 +483,13 @@ internal static partial class BestPracticeAnalyzer
         {
             foreach (Match match in SingleLetterVarPattern().Matches(content))
             {
+                // Skip declaration-shaped snippets inside comments or C# string literals
+                // (common in analyzer tests) so only real local variables are flagged.
+                if (IsInsideComment(content, match.Index, language) || IsInsideStringLiteral(content, match.Index))
+                {
+                    continue;
+                }
+
                 string name = match.Groups["name"].Value;
                 if (name is "i" or "j" or "k" or "m" or "n" or "x" or "y" or "z" or "e" or "s" or "_")
                 {
@@ -519,6 +508,11 @@ internal static partial class BestPracticeAnalyzer
 
             foreach (Match match in PoorCSharpNamingPattern().Matches(content))
             {
+                if (IsInsideComment(content, match.Index, language) || IsInsideStringLiteral(content, match.Index))
+                {
+                    continue;
+                }
+
                 string name = match.Groups["name"].Value;
                 yield return DiagnosticRowFactory.CreateBestPracticeRow(
                     code: "BP1014",

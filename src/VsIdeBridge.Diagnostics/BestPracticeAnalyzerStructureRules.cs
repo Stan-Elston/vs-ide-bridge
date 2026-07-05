@@ -268,6 +268,41 @@ internal static partial class BestPracticeAnalyzer
 
     // ── BP1022: Raw new without smart pointer (C++) ───────────────────────────
 
+    // ── BP1008: C-style cast (C/C++) ──
+
+    public static IEnumerable<JObject> FindCStyleCasts(string file, string content)
+    {
+        CodeLanguage language = GetLanguage(file);
+        // C++ named casts do not exist in C, so .c files get C-appropriate guidance.
+        bool isCSource = file.EndsWith(".c", StringComparison.OrdinalIgnoreCase);
+        int findingCount = 0;
+        foreach (Match match in CStyleCastPattern().Matches(content))
+        {
+            // Skip cast-shaped text inside comments or string literals (e.g. "image(float)"
+            // in documentation prose) so only executable casts are flagged.
+            if (IsInsideComment(content, match.Index, language) || IsInsideStringLiteral(content, match.Index))
+            {
+                continue;
+            }
+
+            string guidance = isCSource
+                ? "Avoid the cast by using the correct type or printf format specifier; C has no named casts."
+                : "Prefer static_cast, reinterpret_cast, or const_cast.";
+            yield return DiagnosticRowFactory.CreateBestPracticeRow(
+                code: "BP1008",
+                message: $"C-style cast '{match.Value.TrimEnd()}' detected. {guidance}",
+                file: file,
+                line: GetLineNumber(content, match.Index),
+                symbol: match.Value.Trim(),
+                helpUri: BP1008HelpUri);
+            findingCount++;
+            if (findingCount >= MaxSuppressionFindingsPerFile)
+            {
+                yield break;
+            }
+        }
+    }
+
     public static IEnumerable<JObject> FindRawNew(string file, string content)
     {
         CodeLanguage language = GetLanguage(file);

@@ -236,7 +236,7 @@ internal sealed partial class ErrorListService
         int timeout = timeoutMilliseconds > 0 ? timeoutMilliseconds : DefaultWaitTimeoutMilliseconds;
         DateTimeOffset deadline = DateTimeOffset.UtcNow.AddMilliseconds(timeout);
         JObject[] lastRows = [];
-        int? lastCount = null;
+        string? lastSignature = null;
         int stableSamples = 0;
         int requiredStableSamples = StableSampleCount;
 
@@ -255,9 +255,10 @@ internal sealed partial class ErrorListService
                 rows = [];
             }
 
-            if (rows.Count != lastCount)
+            string signature = CreateRowsStabilitySignature(rows);
+            if (!string.Equals(signature, lastSignature, StringComparison.Ordinal))
             {
-                lastCount = rows.Count;
+                lastSignature = signature;
                 stableSamples = 1;
             }
             else
@@ -267,7 +268,7 @@ internal sealed partial class ErrorListService
 
             lastRows = [.. rows];
             // Wait for multiple stable reads even after IntelliSense reports ready,
-            // because some Error List providers continue hydrating message rows after that point.
+            // because some Error List providers continue hydrating or replacing rows after that point.
             if (stableSamples >= requiredStableSamples)
             {
                 return rows;
@@ -277,6 +278,13 @@ internal sealed partial class ErrorListService
         }
 
         return lastRows;
+    }
+
+    private static string CreateRowsStabilitySignature(IReadOnlyList<JObject> rows)
+    {
+        return string.Join(
+            "\n",
+            rows.Select(CreateDiagnosticIdentity).OrderBy(static value => value, StringComparer.OrdinalIgnoreCase));
     }
 
     private async Task<IReadOnlyList<JObject>> ReadRowsAsync(IdeCommandContext context, bool includeDteRows = true)
@@ -399,7 +407,7 @@ internal sealed partial class ErrorListService
             int column = errorItem.Column;
             NormalizeBuildOutputLocation(ref file, ref line, ref column);
             string code = InferCode(description);
-            dteRows.Add(new()
+            JObject row = new()
             {
                 [SeverityKey] = severity,
                 ["code"] = code,
@@ -411,7 +419,8 @@ internal sealed partial class ErrorListService
                 ["line"] = line,
                 ["column"] = column,
                 ["symbols"] = new JArray(ExtractSymbols(description)),
-            });
+            };
+            dteRows.Add(ApplyDiagnosticAnnotations(row));
         }
 
         return dteRows;
@@ -495,20 +504,23 @@ internal sealed partial class ErrorListService
             code = InferCode(message);
         }
 
-        return new JObject
+        JObject row = new()
         {
             [SeverityKey] = MapTableSeverity(tryGetValue),
             [CodeKey] = code,
+            [CodeFamilyKey] = InferCodeFamily(code),
             [ToolKey] = GetTableString(tryGetValue, StandardTableKeyNames.BuildTool),
             [MessageKey] = message,
             [ProjectKey] = project,
             [FileKey] = file,
             [LineKey] = line,
+            [ColumnKey] = column,
             [GuidanceKey] = GetTableString(tryGetValue, GuidanceKey),
             [SuggestedActionKey] = GetTableString(tryGetValue, SuggestedActionKey),
             [LlmFixPromptKey] = GetTableString(tryGetValue, LlmFixPromptKey),
             [AuthorityKey] = GetTableString(tryGetValue, AuthorityKey),
         };
+        return ApplyDiagnosticAnnotations(row);
     }
 
     private static string GetTableString(TableValueReader tryGetValue, params string[] keyNames)

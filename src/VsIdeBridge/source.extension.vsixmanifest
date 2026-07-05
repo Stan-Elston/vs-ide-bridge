@@ -1,20 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="RenegadeRiff86.VsIdeBridge" Version="3.0.3" Language="en-US" Publisher="RenegadeRiff86" />
+    <Identity Id="RenegadeRiff86.VsIdeBridge" Version="3.0.4" Language="en-US" Publisher="RenegadeRiff86" />
     <DisplayName>VS IDE Bridge</DisplayName>
     <Description xml:space="preserve">Expose stable scriptable Visual Studio IDE commands for state, search, breakpoints, debugging, build, and Error List capture.</Description>
     <MoreInfo>https://github.com/RenegadeRiff86/Visual-Studio-MCP</MoreInfo>
   </Metadata>
 
   <Installation>
-    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[18.0,19.0)">
+    <!-- 17.14 floor: the extension builds against 17.14.x VS SDK packages, so any
+         VS 2022 servicing release older than 17.14 cannot load them. -->
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.14,19.0)">
       <ProductArchitecture>amd64</ProductArchitecture>
     </InstallationTarget>
-    <InstallationTarget Id="Microsoft.VisualStudio.Pro" Version="[18.0,19.0)">
+    <InstallationTarget Id="Microsoft.VisualStudio.Pro" Version="[17.14,19.0)">
       <ProductArchitecture>amd64</ProductArchitecture>
     </InstallationTarget>
-    <InstallationTarget Id="Microsoft.VisualStudio.Enterprise" Version="[18.0,19.0)">
+    <InstallationTarget Id="Microsoft.VisualStudio.Enterprise" Version="[17.14,19.0)">
       <ProductArchitecture>amd64</ProductArchitecture>
     </InstallationTarget>
   </Installation>
@@ -24,7 +26,7 @@
   </Dependencies>
 
   <Prerequisites>
-    <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[18.0,19.0)" DisplayName="Visual Studio core editor" />
+    <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[17.14,19.0)" DisplayName="Visual Studio core editor" />
   </Prerequisites>
 
   <Assets>

@@ -208,7 +208,7 @@ internal static partial class ToolCatalog
     {
         yield return BridgeTool("list_launch_profiles",
             "List all solution-level launch profiles from the .slnLaunch file. " +
-            "A .slnLaunch file is a JSON array that lives next to the .sln file and defines named multi-project startup configurations — " +
+            "A .slnLaunch file is a JSON array that lives next to the .sln file and defines named multi-project startup configurations - " +
             "the same profiles that appear in the startup dropdown in the VS toolbar. " +
             "Each profile has a Name and a Projects array; each project entry has a Path (relative to the solution), " +
             "an Action (Start, StartWithoutDebugging, or None), and an optional DebugTarget. " +
@@ -221,7 +221,7 @@ internal static partial class ToolCatalog
 
         yield return BridgeTool("set_launch_profile",
             "Activate a named launch profile from the .slnLaunch file, switching VS's startup project selection immediately. " +
-            "Supports exact or partial name matching (case-insensitive); partial match must be unambiguous — if multiple profiles match the query an error lists them so you can be more specific. " +
+            "Supports exact or partial name matching (case-insensitive); partial match must be unambiguous - if multiple profiles match the query an error lists them so you can be more specific. " +
             "Only projects with Action 'Start' or 'StartWithoutDebugging' become startup projects; projects with Action 'None' are listed in the result but not activated. " +
             "Call list_launch_profiles first to see available profile names.",
             ObjectSchema(Req("name", "Launch profile name (or partial match, case-insensitive). Use the exact name from list_launch_profiles to avoid ambiguity.")),

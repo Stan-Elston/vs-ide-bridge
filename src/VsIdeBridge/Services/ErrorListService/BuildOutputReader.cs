@@ -9,6 +9,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using VsIdeBridge.Infrastructure;
+using VsIdeBridge.Tooling.Build;
 using static VsIdeBridge.Diagnostics.ErrorListConstants;
 using static VsIdeBridge.Diagnostics.ErrorListPatterns;
 
@@ -33,17 +34,44 @@ internal sealed partial class ErrorListService
         }
 
         List<JObject> rows = [];
-        using StringReader reader = new(text);
-        string? line;
-        while ((line = reader.ReadLine()) is not null)
+        foreach (BuildOutputError diagnostic in BuildOutputErrorParser.ParseDiagnostics(text))
         {
-            if (TryParseBuildOutputLine(line, out JObject row))
-            {
-                rows.Add(row);
-            }
+            rows.Add(CreateBuildOutputRow(dte, diagnostic));
         }
 
         return rows;
+    }
+
+    private static JObject CreateBuildOutputRow(DTE2 dte, BuildOutputError diagnostic)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        string code = NormalizeCode(diagnostic.Code);
+        JObject row = new()
+        {
+            [SeverityKey] = diagnostic.Severity,
+            ["code"] = code,
+            ["codeFamily"] = InferCodeFamily(code),
+            ["tool"] = InferTool(code, diagnostic.Message),
+            ["message"] = diagnostic.Message,
+            ["project"] = string.Empty,
+            ["file"] = NormalizeFilePath(diagnostic.File ?? string.Empty),
+            ["line"] = diagnostic.Line ?? 0,
+            ["column"] = diagnostic.Column ?? 0,
+            ["symbols"] = new JArray(ExtractSymbols(diagnostic.Message)),
+            ["source"] = "build-output",
+            ["rawLine"] = diagnostic.RawLine,
+        };
+
+        if (diagnostic.HasProjectOrigin)
+        {
+            row["originFile"] = NormalizeBuildOriginFilePath(dte, diagnostic.OriginFile ?? string.Empty);
+            row["originLine"] = diagnostic.OriginLine ?? 0;
+            row["originColumn"] = diagnostic.OriginColumn ?? 0;
+            row["originRawLine"] = diagnostic.OriginRawLine;
+        }
+
+        return row;
     }
 
     private static string TryReadBuildOutputText(DTE2 dte, OutputWindowPane pane)
@@ -222,6 +250,86 @@ internal sealed partial class ErrorListService
             // Build output can include non-path tokens in the file column; keep the raw value
             // so diagnostics still flow without failing the entire error-list request.
             return value;
+        }
+    }
+
+    private static string NormalizeBuildOriginFilePath(DTE2 dte, string value)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        string trimmed = value.Trim();
+        if (Path.IsPathRooted(trimmed))
+        {
+            return NormalizeFilePath(trimmed);
+        }
+
+        string? sourceRelativePath = TryExtractSourceRelativePath(trimmed);
+        string? solutionSourceRoot = TryFindSolutionSourceRoot(dte);
+        if (!string.IsNullOrWhiteSpace(sourceRelativePath) && !string.IsNullOrWhiteSpace(solutionSourceRoot))
+        {
+            return NormalizeFilePath(Path.Combine(solutionSourceRoot, sourceRelativePath));
+        }
+
+        string? solutionDirectory = TryGetSolutionDirectory(dte);
+        return string.IsNullOrWhiteSpace(solutionDirectory)
+            ? NormalizeFilePath(trimmed)
+            : NormalizeFilePath(Path.GetFullPath(Path.Combine(solutionDirectory, trimmed)));
+    }
+
+    private static string? TryExtractSourceRelativePath(string value)
+    {
+        string normalized = value.Replace('\\', '/');
+        int sourceIndex = normalized.IndexOf("src/", StringComparison.OrdinalIgnoreCase);
+        return sourceIndex < 0
+            ? null
+            : normalized.Substring(sourceIndex).Replace('/', Path.DirectorySeparatorChar);
+    }
+
+    private static string? TryFindSolutionSourceRoot(DTE2 dte)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        string? directory = TryGetSolutionDirectory(dte);
+        while (!string.IsNullOrWhiteSpace(directory))
+        {
+            if (Directory.Exists(Path.Combine(directory, "src")))
+            {
+                return directory;
+            }
+
+            DirectoryInfo? parent = Directory.GetParent(directory);
+            if (parent is null || string.Equals(parent.FullName, directory, StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            directory = parent.FullName;
+        }
+
+        return null;
+    }
+
+    private static string? TryGetSolutionDirectory(DTE2 dte)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        try
+        {
+            Solution? solution = dte.Solution;
+            string? solutionFullName = solution?.FullName;
+            return string.IsNullOrWhiteSpace(solutionFullName)
+                ? null
+                : Path.GetDirectoryName(solutionFullName);
+        }
+        catch (COMException ex)
+        {
+            LogNonCriticalException(ex);
+            return null;
         }
     }
 

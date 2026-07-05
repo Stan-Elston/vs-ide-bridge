@@ -681,7 +681,7 @@ internal static class GitSdkReader
         // the caller expected, dispose and throw a clear error rather than silently operating
         // on the wrong repository.
         //
-        // We allow the solution directory to be a subdirectory of the repo root — this is the
+        // We allow the solution directory to be a subdirectory of the repo root - this is the
         // normal case when a CMake-generated solution lives in a build/ subfolder inside the repo.
         string foundRoot = repo.Info.WorkingDirectory
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);

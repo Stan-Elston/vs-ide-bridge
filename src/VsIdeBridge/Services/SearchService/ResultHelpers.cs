@@ -237,7 +237,12 @@ internal sealed partial class SearchService
         if (!string.IsNullOrWhiteSpace(solutionDirectory))
         {
             string rootedCandidate = Path.GetFullPath(Path.Combine(solutionDirectory, normalizedRelativePath));
-            if (File.Exists(rootedCandidate) || Directory.Exists(rootedCandidate))
+            // Root only concrete FILE references (used to target a specific document). A relative
+            // DIRECTORY fragment must stay a substring filter: for out-of-tree builds the solution
+            // directory is the build tree, and a filter like "src/libslic3r" resolving to an
+            // existing build-default\src\libslic3r would become an exclusive rooted prefix that
+            // silently drops every match under the real source tree.
+            if (File.Exists(rootedCandidate))
             {
                 return PathNormalization.NormalizeFilePath(rootedCandidate);
             }

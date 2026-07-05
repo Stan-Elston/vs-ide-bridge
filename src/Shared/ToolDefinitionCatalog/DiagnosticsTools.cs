@@ -14,7 +14,7 @@ public static partial class ToolDefinitionCatalog
             DiagnosticsCategory,
             "Read current Error List.",
             "Read current Error List diagnostics without triggering a build. After edits or builds, prefer wait_for_ready first and " +
-            "use build_errors when you need a fresh build plus Error List snapshot. Each result row includes a \"handle\" field � " +
+            "use build_errors when you need a fresh build plus Error List snapshot. Each result row includes a \"handle\" field - " +
             "pass it directly as the file argument to read_file or apply_diff instead of copying the full path." +
             DiagnosticsRefreshGuidance,
             parameterSchema,
@@ -29,7 +29,7 @@ public static partial class ToolDefinitionCatalog
             DiagnosticsCategory,
             "Read current Error List warnings.",
             "Read current Error List warning rows without triggering a build. Use this when you want compiler and analyzer warnings " +
-            "without mixing them with errors or build messages. Each result row includes a \"handle\" field � pass it directly as the " +
+            "without mixing them with errors or build messages. Each result row includes a \"handle\" field - pass it directly as the " +
             "file argument to read_file or apply_diff instead of copying the full path." +
             DiagnosticsRefreshGuidance,
             parameterSchema,
@@ -44,7 +44,7 @@ public static partial class ToolDefinitionCatalog
             DiagnosticsCategory,
             "Read current Error List messages.",
             "Read current Error List message rows without triggering a build. Use this when you want informational and build message " +
-            "output without mixing it into warnings. Each result row includes a \"handle\" field � pass it directly as the file " +
+            "output without mixing it into warnings. Each result row includes a \"handle\" field - pass it directly as the file " +
             "argument to read_file or apply_diff instead of copying the full path." +
             DiagnosticsRefreshGuidance,
             parameterSchema,

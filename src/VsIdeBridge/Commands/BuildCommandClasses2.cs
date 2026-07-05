@@ -141,7 +141,7 @@ internal static partial class DebugBuildCommands
                 args.GetBoolean("wait-for-intellisense", !quick),
                 args.GetInt32(TimeoutMillisecondsArgument, GetQuickDiagnosticsTimeout(quick)),
                 quick,
-                CreateErrorListQuery(args),
+                CreateErrorListQuery(context, args),
                 forceRefresh).ConfigureAwait(true);
 
             context.Handles.RegisterDiagnosticRows(HandleKind.Error, (JArray)errorListResult["rows"]!);
@@ -165,7 +165,7 @@ internal static partial class DebugBuildCommands
                 args.GetBoolean("wait-for-intellisense", !quick),
                 args.GetInt32(TimeoutMillisecondsArgument, GetQuickDiagnosticsTimeout(quick)),
                 quick,
-                CreateErrorListQuery(args, "warning"),
+                CreateErrorListQuery(context, args, "warning"),
                 forceRefresh).ConfigureAwait(true);
 
             context.Handles.RegisterDiagnosticRows(HandleKind.Warning, (JArray)warningListResult["rows"]!);
@@ -189,7 +189,7 @@ internal static partial class DebugBuildCommands
                 args.GetBoolean("wait-for-intellisense", !quick),
                 args.GetInt32(TimeoutMillisecondsArgument, GetQuickDiagnosticsTimeout(quick)),
                 quick,
-                CreateErrorListQuery(args, "message"),
+                CreateErrorListQuery(context, args, "message"),
                 forceRefresh).ConfigureAwait(true);
 
             context.Handles.RegisterDiagnosticRows(HandleKind.Message, (JArray)messageListResult["rows"]!);
@@ -217,7 +217,7 @@ internal static partial class DebugBuildCommands
                 waitForIntellisense: false,
                 timeout,
                 quickSnapshot: false,
-                CreateErrorListQuery(args)).ConfigureAwait(true);
+                CreateErrorListQuery(context, args)).ConfigureAwait(true);
 
             JObject buildAndErrorsResult = new()
             {
@@ -267,7 +267,7 @@ internal static partial class DebugBuildCommands
                 waitForIntellisense: false,
                 timeout,
                 quickSnapshot: false,
-                CreateErrorListQuery(args)).ConfigureAwait(true);
+                CreateErrorListQuery(context, args)).ConfigureAwait(true);
             JObject result = new()
             {
                 ["analysis"] = analysisResult,

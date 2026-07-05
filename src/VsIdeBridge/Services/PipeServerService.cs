@@ -33,6 +33,9 @@ internal sealed class PipeServerService : IDisposable
     private readonly SemaphoreSlim _commandQueue = new(1, 1);
     private Task? _listenTask;
     private DTE2? _dte; // cached after first use; stable for the lifetime of the VS instance
+    // Set by the timeout path while the command queue is held; consumed by the queue
+    // release hand-off so the queue stays closed until the abandoned command finishes.
+    private Task? _abandonedCommand;
 
     public PipeServerService(VsIdeBridgePackage package, IdeBridgeRuntime runtime)
     {
@@ -143,52 +146,13 @@ internal sealed class PipeServerService : IDisposable
     private async Task HandleConnectionAsync(NamedPipeServerStream pipe, CancellationToken ct)
     {
         using (pipe)
+        // net472 ReadLineAsync has no cancellation overload; disposing the pipe on shutdown
+        // is the only way to unblock a pending read so this connection task can exit.
+        using (ct.Register(() => SafeDisposePipe(pipe)))
         {
             try
             {
-                using StreamReader reader = new(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: PipeServerConstants.PipeStreamBufferSize, leaveOpen: true);
-                using StreamWriter writer = new(pipe, new UTF8Encoding(false), bufferSize: PipeServerConstants.PipeStreamBufferSize, leaveOpen: true)
-                {
-                    AutoFlush = true,
-                    NewLine = "\n",
-                };
-
-                while (!ct.IsCancellationRequested && pipe.IsConnected)
-                {
-                    string? line;
-                    try
-                    {
-                        line = await reader.ReadLineAsync().ConfigureAwait(false);
-                    }
-                    catch
-                    {
-                        break; // client disconnected mid-read
-                    }
-
-                    if (line == null) break; // clean EOF
-
-                    string responseLine;
-                    try
-                    {
-                        responseLine = await ExecuteRequestAsync(line, ct).ConfigureAwait(false);
-                    }
-                    catch (Exception ex) when (ex is not null) // request execution boundary
-                    {
-                        // ExecuteRequestAsync should handle all exceptions internally, but if it
-                        // escapes (e.g. OperationCanceledException from WaitAsync during VS shutdown),
-                        // write an error response so the client never receives a raw EOF.
-                        string msg = ex.Message.Replace("\\", "\\\\").Replace("\"", "\\\"");
-                        responseLine = $"{{\"success\":false,\"summary\":\"{msg}\",\"data\":null,\"error\":{{\"code\":\"internal_error\",\"message\":\"Bridge server interrupted: {msg}\"}}}}";
-                    }
-                    try
-                    {
-                        await writer.WriteLineAsync(responseLine).ConfigureAwait(false);
-                    }
-                    catch
-                    {
-                        break; // pipe broke during write — client already disconnected
-                    }
-                }
+                await ServeConnectionRequestsAsync(pipe, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not null) // pipe connection boundary
             {
@@ -196,6 +160,69 @@ internal sealed class PipeServerService : IDisposable
             }
         }
     }
+
+    private async Task ServeConnectionRequestsAsync(NamedPipeServerStream pipe, CancellationToken ct)
+    {
+        using StreamReader reader = new(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: PipeServerConstants.PipeStreamBufferSize, leaveOpen: true);
+        using StreamWriter writer = new(pipe, new UTF8Encoding(false), bufferSize: PipeServerConstants.PipeStreamBufferSize, leaveOpen: true)
+        {
+            AutoFlush = true,
+            NewLine = "\n",
+        };
+
+        while (!ct.IsCancellationRequested && pipe.IsConnected)
+        {
+            string? line;
+            try
+            {
+                line = await reader.ReadLineAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                break; // client disconnected mid-read
+            }
+
+            if (line == null) break; // clean EOF
+
+            string responseLine;
+            try
+            {
+                responseLine = await ExecuteRequestAsync(line, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not null) // request execution boundary
+            {
+                // ExecuteRequestAsync should handle all exceptions internally, but if it
+                // escapes (e.g. OperationCanceledException from WaitAsync during VS shutdown),
+                // write an error response so the client never receives a raw EOF.
+                responseLine = BuildInterruptedResponseLine(ex);
+            }
+            try
+            {
+                await writer.WriteLineAsync(responseLine).ConfigureAwait(false);
+            }
+            catch
+            {
+                break; // pipe broke during write — client already disconnected
+            }
+        }
+    }
+
+    // Serialize a real envelope: exception messages can contain quotes and newlines, and the
+    // client matches the envelope's Summary/Error fields to detect interrupted operations.
+    private static string BuildInterruptedResponseLine(Exception ex) =>
+        JsonConvert.SerializeObject(new CommandEnvelope
+        {
+            SchemaVersion = JsonSchemaVersioning.CurrentSchemaVersion,
+            Command = string.Empty,
+            RequestId = null,
+            Success = false,
+            StartedAtUtc = DateTimeOffset.UtcNow.UtcDateTime.ToString("O"),
+            FinishedAtUtc = DateTimeOffset.UtcNow.UtcDateTime.ToString("O"),
+            Summary = ex.Message,
+            Warnings = [],
+            Error = new { code = "internal_error", message = $"Bridge server interrupted: {ex.Message}" },
+            Data = new JObject(),
+        });
 
     private async Task<string> ExecuteRequestAsync(string requestJson, CancellationToken ct)
     {
@@ -235,8 +262,28 @@ internal sealed class PipeServerService : IDisposable
         bool acquired = false;
         try
         {
-            await _commandQueue.WaitAsync(ct).ConfigureAwait(false);
-            acquired = true;
+            // Bound the queue wait by the command's own timeout: a previous command that
+            // timed out may still be running inside VS and holding the queue (see the
+            // zombie hand-off in ReleaseCommandQueueAfterZombie).
+            acquired = await _commandQueue.WaitAsync(timeoutMilliseconds, ct).ConfigureAwait(false);
+            if (!acquired)
+            {
+                return PipeServerSupport.SerializeFailureEnvelope(
+                    commandName,
+                    request.Id,
+                    "The bridge is still executing a previous command (it likely timed out but is still running inside VS). Wait for it to finish, then retry.",
+                    new JObject(),
+                    new JObject
+                    {
+                        ["code"] = "bridge_busy",
+                        ["message"] = $"Queue wait exceeded {timeoutMilliseconds} ms while a previous command was still executing.",
+                    },
+                    enqueuedAt,
+                    DateTimeOffset.UtcNow,
+                    positionAtEnqueue,
+                    (DateTimeOffset.UtcNow - enqueuedAt).TotalMilliseconds);
+            }
+
             DateTimeOffset startedAt = DateTimeOffset.UtcNow;
             double queueWaitMs = (startedAt - enqueuedAt).TotalMilliseconds;
             return await ExecuteRequestCoreAsync(
@@ -256,8 +303,52 @@ internal sealed class PipeServerService : IDisposable
             Interlocked.Decrement(ref _state.QueuedCommandCount);
             if (acquired)
             {
-                _commandQueue.Release();
+                ReleaseCommandQueueAfterZombie();
             }
+        }
+    }
+
+    private void ReleaseCommandQueueAfterZombie()
+    {
+        Task? zombie = _abandonedCommand;
+        _abandonedCommand = null;
+        if (zombie is null || zombie.IsCompleted)
+        {
+            ReleaseCommandQueueSafe();
+            return;
+        }
+
+        // A timed-out command is still executing inside VS. Keep the queue closed until it
+        // finishes so the next command cannot mutate the IDE concurrently with it.
+        _ = zombie.ContinueWith(
+            _ => ReleaseCommandQueueSafe(),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private void ReleaseCommandQueueSafe()
+    {
+        try
+        {
+            _commandQueue.Release();
+        }
+        catch (ObjectDisposedException ex)
+        {
+            // VS is shutting down; the queue is already gone. Expected during dispose races.
+            ActivityLog.LogWarning(nameof(PipeServerService), $"Command queue released after dispose: {ex.Message}");
+        }
+    }
+
+    private static void SafeDisposePipe(NamedPipeServerStream pipe)
+    {
+        try
+        {
+            pipe.Dispose();
+        }
+        catch (Exception ex) when (ex is not null) // dispose race during shutdown
+        {
+            System.Diagnostics.Debug.WriteLine(ex);
         }
     }
 
@@ -414,7 +505,14 @@ internal sealed class PipeServerService : IDisposable
         string errorCode = isDiagnosticsCommand ? "ide_blocked" : "timeout";
         string summary = isDiagnosticsCommand
             ? "IDE appears blocked (modal dialog or busy state) while processing the command."
-            : $"Command timed out after {timeoutMilliseconds} ms.";
+            : $"Command timed out after {timeoutMilliseconds} ms. It may still be running inside VS; " +
+              "the bridge holds new commands until it completes.";
+        if (!isDiagnosticsCommand && IsDocumentMutatingCommand(commandName))
+        {
+            summary += " A timeout does not undo the edit - it may still land after this response. When the bridge " +
+                "responds again, verify the document content and its saved state (list-tabs flags unsaved tabs) and " +
+                "run save-document if the tab is dirty.";
+        }
         CommandTimeoutDetails details = new(
             TimeoutMs: timeoutMilliseconds,
             DurationMs: commandStopwatch.ElapsedMilliseconds,
@@ -443,6 +541,12 @@ internal sealed class PipeServerService : IDisposable
             queuePositionAtEnqueue,
             queueWaitMs);
     }
+
+    // Commands that mutate editor documents: a timeout does not undo the edit, so the
+    // caller must be told to re-check content and saved state (field report issue 17).
+    private static bool IsDocumentMutatingCommand(string commandName)
+        => commandName is "apply-diff" or "apply-patch" or "write-file"
+            or "Tools.IdeApplyUnifiedDiff" or "Tools.IdeWriteFile";
 
     private async Task<string> HandleCommandFailureAsync(
         string commandName,
@@ -561,7 +665,7 @@ internal sealed class PipeServerService : IDisposable
         => string.Equals(commandName, "write-file", StringComparison.OrdinalIgnoreCase)
             || string.Equals(commandName, "Tools.IdeWriteFile", StringComparison.OrdinalIgnoreCase);
 
-    private static async Task<CommandExecutionResult> AwaitCommandExecutionAsync(
+    private async Task<CommandExecutionResult> AwaitCommandExecutionAsync(
         JoinableTask<CommandExecutionResult> executionTask,
         int timeoutMilliseconds,
         CancellationTokenSource commandCts,
@@ -583,10 +687,13 @@ internal sealed class PipeServerService : IDisposable
         }
 
         commandCts.Cancel();
-        _ = joinedExecutionTask.ContinueWith(
+        // The command may ignore cancellation and keep running inside VS. Observe its
+        // eventual fault and hand its completion to the queue release path so no other
+        // command executes concurrently with it.
+        _abandonedCommand = joinedExecutionTask.ContinueWith(
             task => _ = task.Exception,
             CancellationToken.None,
-            TaskContinuationOptions.OnlyOnFaulted,
+            TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
         throw new OperationCanceledException(commandToken);
     }

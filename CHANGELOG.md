@@ -2,12 +2,57 @@
 
 ## 3.0.4
 
-- Fixed the BP1022 "raw new" best-practice analyzer flagging the word `new` inside comments and string literals, and in C sources where `new` is an ordinary identifier. `FindRawNew` ran the `\bnew\s+\w+` regex over the whole file with no comment/string guard, so documentation text like `creates a new edge` (across `glu-libtess/mesh.h`) and `// fill in the new vector fields` (in libslic3r `Config.hpp`) was reported as a raw allocation -- the majority of hits were false positives. `FindRawNew` now resolves the file's `CodeLanguage` and skips matches inside comments or string literals via the same `IsInsideComment` / `IsInsideStringLiteral` guards that `FindRepeatedStringLiterals` (BP1001) already uses, while genuine allocations such as `new Widget()` are still flagged. Added `FindRawNewIgnoresCommentAndStringOccurrences` and `FindRawNewStillReportsRealAllocation` regression tests.
+Consolidated release rolling up all bridge and installer fixes since 3.0.3.
 
-- Fixed BP1025 best-practice analyzer still flagging C/C++ identifiers that appear inside string literals (the 3.0.1 fix only added `//` line-comment and function-parameter guards). The pass-by-value regex matched words like `string vector` / `string literals` inside an error message passed to `throw_exception(...)` and reported them as by-value parameters `vector` / `literals`, because the string text sits inside the call's parentheses so `IsInsideFunctionParams` returned true. `FindMissingConst` now also calls a new `IsInsideCppStringLiteral` guard that scans the match's line from its start (tracking `\` escapes) and skips matches that fall inside an unclosed double-quoted string, while genuine by-value parameters such as `std::string config` are still flagged.
-- Made the `python_eval` / `python_exec` scratchpad usable beyond arithmetic. Both tools built a `globals_dict` whose `'__builtins__'` was a tiny allowlist (`abs, min, max, sum, round, len, range, print`) that lacked `__import__`, so any `import` statement failed with `ImportError: __import__ not found` and almost every builtin (`dict`, `list`, `str`, `enumerate`, `sorted`, `isinstance`, `type`, ...) was missing -- the scratchpad could effectively only do math. Because it already runs a real Python subprocess gated behind `python_exec` approval, the allowlist added friction without real safety. The `'__builtins__'` override is removed so Python injects the full builtins module (which also enables `import`), `re`/`itertools`/`collections` are pre-imported alongside `math`/`statistics`/`decimal`/`fractions`, and result/JSON serialization now uses `json.dumps(..., default=str)` so a non-JSON-serializable value no longer errors the whole call. Tool descriptions and the MCP server instructions were updated to drop the now-incorrect "do not use import statements" guidance.
+### Installer
 
-- Fixed `python_exec` running the snippet with separate `globals`/`locals` dicts (`exec(source, globals_dict, locals_dict)`), which made any helper defined in the snippet fail with `NameError` on other top-level names: a top-level `def`/`class` captures the globals dict as its `__globals__`, but top-level assignments landed in the separate locals dict, so a function could not see a top-level `pat`, constant, or another helper. `python_exec` now executes in a single namespace (`exec(source, ns)`) so module-level names are mutually visible, and reads the returned `result` from that same namespace; `python_eval` was aligned to `eval(expr, ns)` for consistency.
+- The Visual Studio extension step is now reliable and no longer force-closes an in-use VS. Root cause of the recurring "the extension won't update" failures: `VSIXInstaller /install` is blocked by *any* VS process it recognizes, and repeated builds leave dozens of zombie `MSBuild.exe` (plus `VBCSCompiler.exe` / `ServiceHub.*`) alive, so every install failed with exit 2004 and left the extension stuck at the old version (with an unprocessed `extensions.configurationchanged` marker). The installer now clears those background build processes automatically before the VSIX step (they hold no user data). A leftover *windowless* `devenv.exe` zombie is also cleared automatically with no prompt (detected via `tasklist /V`, whose window title is `N/A` for a zombie vs. `Microsoft Visual Studio` for a real instance); only a genuinely in-use Visual Studio window triggers a warning (a plain `MsgBox`: Yes = close & continue, default / No = retry / Cancel = skip the extension). The check runs before the post-install progress page so the dialog keeps modal focus.
+- The post-install VSIX step is a single `VSIXInstaller /install`. The previous `uninstall-current` + `uninstall-legacy` launches were redundant (the prior version's uninstaller, run first from `InitializeSetup`, already removes the old extension) and were the bulk of the ~45s perceived install "hang" (three VSIXInstaller cold-starts where one suffices). The service stop is not the bottleneck (it finishes in ~40ms).
+- Fixed VSIXInstaller `/logFile` pointing at an invalid path (`{log}\name.log`, where `{log}` is the Setup log *file*, not a directory), so VSIX install/uninstall logs were never written. They now go to `{commonappdata}\VsIdeBridge\logs`.
+
+### Diagnostics & analyzers
+
+- Failed builds whose only errors appear in the Build output pane (linker `LNK2001`/`LNK1120`, `MSB####`) now surface as structured `buildOutputErrors` via a shared `BuildOutputErrorParser`, with `nextStep` guidance pointing at `read_output {pane:"Build"}` when the Error List disagrees. The parser also keeps warning rows and attaches project-code origin metadata (`originFile`/`originLine`/`originColumn`) for MSVC-header/template diagnostics, resolving relative CMake paths against the nearest solution ancestor.
+- Diagnostics summaries no longer say "fix all before building" when only warnings/messages remain, and always show a full severity breakdown so a model cannot declare "0 errors" clean while warnings/messages remain. Content-filtered reads lead with the filtered population and label whole-Error-List totals separately.
+- Grouped diagnostics (`warnings {group_by:"code"}` etc.) report `countScope`/`groupCount`/`diagnosticCount` so group rows are not misread as diagnostic counts, and grouping now spans the full filtered set even with a finite `chunk_size` (the client's chunking paginates the groups; the VSIX is asked for the full row set). Grouped `group_by` pagination also actually paginates the groups instead of returning all of them on every chunk.
+- Diagnostics cache freshness fixes: live full-bucket reads refresh the matching service cache bucket, filtered reads invalidate that severity bucket instead of leaving stale rows, and handle-based `file`/`path` filters bypass the passive cache so handles and filenames use the same freshness path.
+- Analyzer false-positive guards: BP1022 (raw `new`), BP1025 (by-value params), BP1008 (C-style cast), and BP1014 (single-letter variable) now skip matches inside comments and string literals (and BP1008 handles unnamed `const` params and gives C-appropriate guidance in `.c` files). VCR001/VCR003 rows are labeled analyzer-limited (VS's own linter can lag/misread modern C++ like `= delete` and explicit specializations).
+
+### apply_diff / documents
+
+- Multi-edit `apply_diff` stops at the first failed edit (later edits often depend on earlier ones), reports the rest as `skipped`, and labels the result `PARTIAL MUTATION`.
+- `apply_diff`/`write_file` no longer silently skip the requested save when the editor window loses its `Document` reference after a large buffer replace; the save re-resolves the open document by path and the `saved` field reports the real state. Timeout envelopes for document-mutating commands now say a timeout does not undo the edit and to verify/save.
+- `save_document` resolves handles (`f:29`) and repo-relative paths via the same `DocumentService` resolver as reads/edits, and an omitted `file` now correctly saves all open documents (`all=true`) as documented.
+- `apply_diff` no longer patches a guessed location when every context line is trivial (blank lines / lone braces); it fails with guidance to include a distinctive line.
+- `compile_file` and positioned `execute_command` resolve source-relative paths in out-of-tree builds via the full document resolver instead of normalizing into `build-default\src\...`.
+
+### Connection & reliability
+
+- Fixed the stale-binding failure mode where every bridge call after a timeout kept failing until a manual rebind: connect attempts are capped (~10s), a dead pipe is evicted and retried with fresh discovery, the per-pipe lock file is disposed on failure, and a response-timeout reports `SessionLost` only when the VS process is actually gone.
+- Timed-out commands no longer execute concurrently with the next request (the abandoned command owns the queue release; a blocked request gets a `bridge_busy` envelope).
+- Fixed the request-execution fallback producing invalid JSON (newlines in Win32 exception messages broke the pipe protocol); it now serializes a real envelope.
+- Fixed connection tasks leaking on VS shutdown (net472 `ReadLineAsync` has no cancellation overload).
+- `search_symbols` `kind` filter works against text-source matches (C/C++ solutions) via `inferredKind`; `find_text_batch` accepts the documented `{query, path}` object form; `find_text`/`search_symbols` relative directory path filters stay substring filters instead of becoming exclusive rooted prefixes under the build directory.
+- The bridge reports its own version everywhere it identifies itself (discovery JSON, `vs_state`, `bridge_health`, bind responses).
+
+### Watchdog
+
+- Watchdog probe timeouts while a foreground bridge command holds the UI thread are classified as busy (`isBusy`, `totalBusyProbes`) instead of degraded; a probe timeout with no command running still degrades.
+
+### HTTP / service (LocalSystem)
+
+- Fixed the LocalSystem service (session 0) misclassifying every interactive VS as dead and deleting its discovery file: `IsLiveInstance` required a visible `MainWindowHandle`, but window handles are session-scoped, so over HTTP `visibleInstanceCount` went to 0 and the VSIX's pipe JSON was deleted. The zombie-window heuristic now only applies within the same session.
+- Fixed `memory_search`/`memory_read` failing under LocalSystem with the memory root resolving under `C:\WINDOWS\system32\config\systemprofile\.codex`. The interactive user's home is now derived from a discovery-file path (the bound instance's, or any discovered instance's when a fresh HTTP session is unbound). `memory_search` also gained ranked multi-term queries.
+
+### Encoding
+
+- Replaced every corrupted separator character in bridge source strings (17 lines across 10 files carried a literal U+FFFD or invalid Windows-1252 dash byte, visible as mojibake in `bridge_health`/tool descriptions/advisories, plus two double-encoded em dashes in `PatchService`). Every source file decodes as valid UTF-8.
+
+### Platform & packaging
+
+- The VSIX now targets Visual Studio 2022 in addition to 2026 (`[17.14,19.0)`; 17.14 is the SDK floor).
+- Made the `python_eval`/`python_exec` scratchpad usable beyond arithmetic: the `__builtins__` allowlist is removed (full builtins + `import`), `re`/`itertools`/`collections` are pre-imported, snippets run in a single namespace so top-level helpers see each other, and non-JSON values serialize via `default=str`.
+- Fixed `scripts/build.bat` failing with "vswhere.exe not found" in environments without `ProgramFiles(x86)` by adding a literal-path fallback.
 
 ## 3.0.3
 

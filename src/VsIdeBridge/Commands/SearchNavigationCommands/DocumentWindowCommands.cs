@@ -173,7 +173,7 @@ internal static partial class SearchNavigationCommands
             bool waitForBuild = args.GetBoolean("wait-for-build", false);
             int timeoutMs = args.GetInt32("timeout-ms", 120_000);
 
-            // GetServiceAsync is thread-safe — stay off the main thread until we actually need it.
+            // GetServiceAsync is thread-safe - stay off the main thread until we actually need it.
             object? svcObj = waitForBuild
                 ? await context.Package.GetServiceAsync(typeof(SVsSolutionBuildManager)).ConfigureAwait(false)
                 : null;

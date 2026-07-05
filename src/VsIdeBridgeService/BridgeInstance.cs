@@ -11,6 +11,8 @@ internal sealed record BridgeInstance
     public required string Label { get; init; }
     public required string Source { get; init; }
     public string? StartedAtUtc { get; init; }
+    // VSIX version stamped into the discovery record; null for pre-3.0.6 bridges.
+    public string? Version { get; init; }
     public required string DiscoveryFile { get; init; }
     public required DateTime LastWriteTimeUtc { get; init; }
 }

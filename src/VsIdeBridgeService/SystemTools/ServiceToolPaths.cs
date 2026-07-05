@@ -147,7 +147,7 @@ internal static class ServiceToolPaths
             return repoRoot;
         }
 
-        // The repo root is an ancestor — only accept it when the solution directory has at
+        // The repo root is an ancestor - only accept it when the solution directory has at
         // least one file tracked in that repo.  If nothing is tracked there, the solution is
         // an untracked subdirectory of a parent mega-repo; return the solution directory so
         // that git operations are scoped to the right place.
@@ -166,7 +166,7 @@ internal static class ServiceToolPaths
         {
             string relativePath = Path.GetRelativePath(repoRoot, directory).Replace('\\', '/');
 
-            // GetRelativePath returns "." when the paths are equal — already handled above.
+            // GetRelativePath returns "." when the paths are equal - already handled above.
             // A ".." prefix means directory is outside repoRoot, which should not happen;
             // treat it as tracked to avoid a confusing fallback.
             if (relativePath == "." || relativePath.StartsWith("..", StringComparison.Ordinal))

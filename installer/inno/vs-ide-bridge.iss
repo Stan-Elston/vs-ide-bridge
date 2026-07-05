@@ -2,7 +2,7 @@
 #define MyAppFolderName "VsIdeBridge"
 #define MyAppPublisher "RenegadeRiff86"
 #define MyAppURL "https://github.com/RenegadeRiff86/Visual-Studio-MCP"
-#define MyAppVersion "3.0.3"
+#define MyAppVersion "3.0.4"
 #define ServiceName "VsIdeBridgeService"
 #define VsixId "RenegadeRiff86.VsIdeBridge"
 #define LegacyVsixId "StanElston.VsIdeBridge"
@@ -58,6 +58,8 @@ Source: "..\..\src\VsIdeBridgeLauncher\bin\{#Configuration}\*"; DestDir: "{app}\
 Source: "..\..\src\VsIdeBridge\bin\{#Configuration}\net472\VsIdeBridge.vsix"; DestDir: "{app}\vsix"; Flags: ignoreversion
 Source: "..\..\src\VsIdeBridgeInstaller\bin\{#Configuration}\net8.0-windows\python-runtime\*"; DestDir: "{app}\python\managed-runtime"; Flags: recursesubdirs createallsubdirs ignoreversion uninsrestartdelete; Check: ShouldInstallManagedPython
 Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [UninstallRun]
 Filename: "{sys}\sc.exe"; Parameters: "stop ""{#ServiceName}"""; Flags: runhidden waituntilterminated; RunOnceId: "{#ServiceName}-stop"; StatusMsg: "Stopping VS IDE Bridge service..."
@@ -75,12 +77,18 @@ const
   PythonSupportPageDescription = 'Choose how VS IDE Bridge should provision Python support.';
   PythonProvisioningManaged = 'managed';
   PythonProvisioningSkip = 'skip';
-  VsixInstallerLogArgumentPrefix = '/quiet /shutdownprocesses /logFile:';
+  // No /shutdownprocesses on the install path: instead of force-closing the user's
+  // Visual Studio, EnsureVisualStudioClosedForVsix() warns and waits for them to close
+  // it (force-close only on explicit opt-in or in silent/unattended installs).
+  VsixInstallerLogArgumentPrefix = '/quiet /logFile:';
 
 var
   CachedVsixInstallerPath: string;
   PostInstallProgressPage: TOutputProgressWizardPage;
   PostInstallCompleted: Boolean;
+  { Set when the user declines to close Visual Studio, so the VS extension install is
+    skipped and the finish page can say so instead of claiming success. }
+  VsixInstallSkipped: Boolean;
   PythonSupportPage: TWizardPage;
   ManagedPythonRadioButton: TRadioButton;
   SkipManagedPythonRadioButton: TRadioButton;
@@ -605,7 +613,154 @@ end;
 
 function GetVsixLogFileArgument(const LogFileName: string): string;
 begin
-  Result := ExpandConstant(VsixInstallerLogArgumentPrefix + '"{log}\' + LogFileName + '"');
+  // {log} is the Setup log FILE, so '{log}\name.log' was an invalid file-as-directory path
+  // and VSIXInstaller silently wrote nothing. Log into the product logs directory (created
+  // by [Dirs]) so VSIX install/uninstall output is actually available for diagnosis.
+  Result := ExpandConstant(VsixInstallerLogArgumentPrefix + '"{commonappdata}\VsIdeBridge\logs\' + LogFileName + '"');
+end;
+
+function IsVisualStudioRunning(): Boolean;
+var
+  ExitCode: Integer;
+  TempFile: string;
+  Content: AnsiString;
+begin
+  Result := False;
+  TempFile := ExpandConstant('{tmp}\devenv-check.txt');
+  // tasklist filter is exact-name; redirect to a temp file and scan for the process.
+  if Exec(ExpandConstant('{cmd}'), '/C tasklist /FI "IMAGENAME eq devenv.exe" /NH > "' + TempFile + '" 2>&1',
+          '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then
+  begin
+    if LoadStringFromFile(TempFile, Content) then
+      Result := Pos('devenv.exe', LowerCase(string(Content))) > 0;
+  end;
+  DeleteFile(TempFile);
+end;
+
+// True only when a devenv.exe with a REAL window is running (a user is actually using VS).
+// A leftover zombie devenv.exe has no window, so tasklist /V reports its title as "N/A";
+// a real instance's title always contains "Microsoft Visual Studio". This lets the installer
+// silently clear zombies (no user data) while still warning about an in-use Visual Studio.
+function RealVisualStudioRunning(): Boolean;
+var
+  ExitCode: Integer;
+  TempFile: string;
+  Content: AnsiString;
+begin
+  Result := False;
+  TempFile := ExpandConstant('{tmp}\devenv-v-check.txt');
+  if Exec(ExpandConstant('{cmd}'), '/C tasklist /V /FI "IMAGENAME eq devenv.exe" /FO LIST > "' + TempFile + '" 2>&1',
+          '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then
+  begin
+    if LoadStringFromFile(TempFile, Content) then
+      Result := Pos('visual studio', LowerCase(string(Content))) > 0;
+  end;
+  DeleteFile(TempFile);
+end;
+
+// Force-close every devenv.exe and poll until they are actually gone (a lingering
+// zombie devenv.exe can outlive the visible windows and still hold the extension).
+// Returns True when no devenv.exe remains.
+function ForceCloseVisualStudio(): Boolean;
+var
+  ExitCode, Attempt: Integer;
+begin
+  Log('ForceCloseVisualStudio: taskkill /F /IM devenv.exe');
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM devenv.exe', '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
+  for Attempt := 1 to 20 do  { poll up to ~5s for the process (and its handles) to release }
+  begin
+    if not IsVisualStudioRunning() then
+    begin
+      Result := True;
+      Sleep(500);  { small grace so the OS releases the extension file handles }
+      Exit;
+    end;
+    Sleep(250);
+  end;
+  Result := not IsVisualStudioRunning();
+end;
+
+// Clear the *background* processes that also block VSIXInstaller's silent install but
+// hold no user data: MSBuild.exe (node-reuse build workers), VBCSCompiler.exe (the Roslyn
+// compiler server) and the ServiceHub.* hosts. Repeated builds can leave dozens of zombie
+// MSBuild.exe alive; VSIXInstaller's BlockingProcessBlocker then fails every /install with
+// exit 2004 - this was the real reason the extension appeared to "not update". These are
+// safe to kill unconditionally (unlike devenv, which may hold unsaved work).
+procedure KillVsBackgroundBlockers();
+var
+  ExitCode: Integer;
+begin
+  Log('KillVsBackgroundBlockers: clearing MSBuild/VBCSCompiler/ServiceHub before VSIXInstaller.');
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM MSBuild.exe', '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM VBCSCompiler.exe', '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /FI "IMAGENAME eq ServiceHub.*"', '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
+  Sleep(500);  { let the OS release handles before VSIXInstaller enumerates blockers }
+end;
+
+// The VSIX install path no longer passes /shutdownprocesses, so the VSIXInstaller blockers
+// must be cleared here. Visual Studio (devenv.exe) may hold unsaved work, so it is only
+// warned about - force-close is an explicit button; Cancel simply skips the extension (it
+// can be installed later from {app}\vsix). The background build blockers, which have no
+// user data, are killed automatically once devenv is gone. Returns True to proceed with
+// the extension install, False to skip it.
+function EnsureVisualStudioClosedForVsix(): Boolean;
+var
+  Response: Integer;
+begin
+  Result := True;
+  while IsVisualStudioRunning() do
+  begin
+    { A leftover zombie devenv.exe (no window) has no unsaved work, so kill it without
+      prompting - this is the case that kept silently failing when the user "closed VS"
+      but a background devenv lingered. Only a REAL, in-use Visual Studio (with a window)
+      gets the warning. Silent installs always force-close. }
+    if WizardSilent() or (not RealVisualStudioRunning()) then
+    begin
+      Log('EnsureVisualStudioClosedForVsix: no in-use Visual Studio window; clearing leftover devenv.exe.');
+      if not ForceCloseVisualStudio() then
+      begin
+        Log('EnsureVisualStudioClosedForVsix: devenv.exe would not terminate; skipping extension install.');
+        Result := False;
+        Exit;
+      end;
+      Break;  { devenv cleared; proceed to background-blocker cleanup below }
+    end;
+
+    { Real Visual Studio is open. Plain MsgBox with known return codes (IDYES/IDNO/IDCANCEL);
+      YES is the default so an auto-dismissed dialog still closes VS and proceeds rather than
+      silently skipping. }
+    Response := MsgBox(
+      'Visual Studio is open, and the VS IDE Bridge extension cannot be updated while it is'
+      + ' running.'#13#10#13#10 +
+      'YES  -  close Visual Studio now and continue installing the extension.'#13#10 +
+      'NO  -  I will save my work and close it myself; check again.'#13#10 +
+      'CANCEL  -  skip the extension for now (you can install it later from '
+      + ExpandConstant('{app}') + '\vsix).',
+      mbConfirmation, MB_YESNOCANCEL);
+
+    if Response = IDYES then
+    begin
+      Log('EnsureVisualStudioClosedForVsix: force-closing Visual Studio (YES).');
+      if not ForceCloseVisualStudio() then
+        Log('EnsureVisualStudioClosedForVsix: devenv.exe still present after force-close; will re-prompt.');
+      { loop re-checks; if it is gone the while exits and we proceed }
+    end
+    else if Response = IDNO then
+    begin
+      { Retry: fall through and re-check. }
+    end
+    else
+    begin
+      { CANCEL: leave VS alone and skip the VSIX step. }
+      Log('EnsureVisualStudioClosedForVsix: user cancelled; skipping the extension install.');
+      Result := False;
+      Exit;
+    end;
+  end;
+
+  { devenv is gone (or was never running / was force-closed); clear the background build
+    processes that also block VSIXInstaller before the caller runs /install. }
+  KillVsBackgroundBlockers();
 end;
 
 function GetLegacyVsixUninstallParameters(): string;
@@ -730,7 +885,7 @@ begin
     Result := Result + 1;
 
   if HasVsixInstallerPath then
-    Result := Result + 3;
+    Result := Result + 1;  { single VSIXInstaller /install (the old version's uninstaller already removed the previous VSIX) }
 end;
 
 procedure UpdatePostInstallProgress(const Position, Max: Integer; const Status, SubStatus: string);
@@ -831,9 +986,18 @@ var
   StepIndex: Integer;
   TotalSteps: Integer;
   VsixInstallerPath: string;
+  VsixAllowed: Boolean;
 begin
   ScPath := ExpandConstant('{sys}\sc.exe');
   VsixInstallerPath := ResolveVsixInstallerPath();
+
+  { Resolve whether the VS extension can be installed BEFORE the progress page is shown -
+    a MsgBox displayed on top of the TOutputProgressWizardPage can lose modality and be
+    auto-dismissed. This also clears the background build blockers up front. }
+  VsixAllowed := True;
+  if VsixInstallerPath <> '' then
+    VsixAllowed := EnsureVisualStudioClosedForVsix();
+
   TotalSteps := GetPostInstallStepCount(VsixInstallerPath <> '');
   StepIndex := 0;
 
@@ -913,30 +1077,25 @@ begin
 
     if VsixInstallerPath <> '' then
     begin
-      RunPostInstallStep(
-        StepIndex,
-        TotalSteps,
-        'Removing current VS IDE Bridge extension identity...',
-        'VSIXInstaller /uninstall current',
-        VsixInstallerPath,
-        GetCurrentVsixUninstallParameters(),
-        False);
-      RunPostInstallStep(
-        StepIndex,
-        TotalSteps,
-        'Removing previous VS IDE Bridge extension identity...',
-        'VSIXInstaller /uninstall legacy',
-        VsixInstallerPath,
-        GetLegacyVsixUninstallParameters(),
-        False);
-      RunPostInstallStep(
-        StepIndex,
-        TotalSteps,
-        'Installing VS IDE Bridge extension into Visual Studio...',
-        'VSIXInstaller /install',
-        VsixInstallerPath,
-        GetVsixInstallParameters(),
-        True);
+      // InitializeSetup already ran the previous version's uninstaller (which removes the
+      // old VSIX via its own [UninstallRun]), so a single /install is all that is needed
+      // here - the old uninstall-current / uninstall-legacy steps were redundant and were
+      // the bulk of the perceived install "hang" (three VSIXInstaller cold-starts).
+      { VsixAllowed was resolved above, before the progress page was shown. }
+      if VsixAllowed then
+        RunPostInstallStep(
+          StepIndex,
+          TotalSteps,
+          'Installing VS IDE Bridge extension into Visual Studio...',
+          'VSIXInstaller /install',
+          VsixInstallerPath,
+          GetVsixInstallParameters(),
+          True)
+      else
+      begin
+        VsixInstallSkipped := True;
+        Log('RunPostInstallActions: VSIX install skipped at user request (Visual Studio left open).');
+      end;
     end
     else
     begin
@@ -964,7 +1123,11 @@ procedure CurPageChanged(CurPageID: Integer);
 begin
   if CurPageID = wpFinished then
   begin
-    if HasVsixInstaller() then
+    if VsixInstallSkipped then
+      WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + InstallerDoubleLineBreak +
+        'Visual Studio extension install was skipped because Visual Studio was left open. '
+        + 'Install it later by closing Visual Studio and running {app}\vsix\VsIdeBridge.vsix.'
+    else if HasVsixInstaller() then
       WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + InstallerDoubleLineBreak +
         'Visual Studio extension installed: {#VsixId}.'
     else

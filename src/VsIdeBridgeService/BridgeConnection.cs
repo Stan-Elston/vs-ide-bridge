@@ -151,7 +151,14 @@ internal sealed class BridgeConnection
             throw;
         }
         catch (BridgeException ex) { throw new McpRequestException(id, BridgeError, ex.Message); }
-        catch (TimeoutException ex) { throw new McpRequestException(id, TimeoutError, $"Timed out: {ex.Message}"); }
+        catch (BridgeConnectTimeoutException ex)
+        {
+            // The request never reached VS, so a retry is safe for every profile. Evict the
+            // cached instance and re-discover — a stale pipe (VS restarted) otherwise fails
+            // on every call until the user manually rebinds.
+            return await RetryAfterFailureAsync(id, request, ex, ignoreSolutionHint, timeoutProfile).ConfigureAwait(false);
+        }
+        catch (TimeoutException ex) { throw MapResponseTimeout(id, ex); }
         catch (UnauthorizedAccessException ex) when (ShouldRetry(timeoutProfile))
         {
             return await RetryAfterFailureAsync(id, request, ex, ignoreSolutionHint, timeoutProfile).ConfigureAwait(false);
@@ -168,9 +175,9 @@ internal sealed class BridgeConnection
     {
         BridgeInstance instance = await GetInstanceAsync(ignoreSolutionHint).ConfigureAwait(false);
         await using VsPipeClient client = await VsPipeClient.CreateAsync(
-             instance.PipeName,
-            GetCommandTimeoutMs(timeoutProfile),
-            GetPipeGateTimeoutMs(timeoutProfile)).ConfigureAwait(false);
+            instance.PipeName,
+            GetCommandTimeoutMs(timeoutProfile, _timeoutOverrideMs),
+            GetPipeGateTimeoutMs(timeoutProfile, _timeoutOverrideMs)).ConfigureAwait(false);
         return await client.SendAsync((JsonObject)request.DeepClone()).ConfigureAwait(false);
     }
 
@@ -201,6 +208,24 @@ internal sealed class BridgeConnection
         catch (BridgeException retryEx) { throw new McpRequestException(id, BridgeError, retryEx.Message); }
         catch (TimeoutException retryEx) { throw new McpRequestException(id, TimeoutError, $"Timed out: {retryEx.Message}"); }
         catch (Exception retryEx) when (retryEx is not null) { throw new McpRequestException(id, CommError, $"VS bridge retry failed: {retryEx.Message}"); }
+    }
+
+    private McpRequestException MapResponseTimeout(JsonNode? id, TimeoutException ex)
+    {
+        // The request reached VS, so don't re-send it and don't silently rebind to another
+        // instance — VS is usually just busy. But if the VS process died mid-command, evict
+        // the cached instance so the next call re-discovers instead of timing out against a
+        // dead pipe again.
+        BridgeInstance? current = CurrentInstance;
+        if (current is not null && VsDiscovery.IsProcessGone(current.ProcessId))
+        {
+            ClearCached();
+            return new McpRequestException(id, SessionLostError,
+                $"VS session lost: '{current.Label}' (pid {current.ProcessId}) closed while the command was in flight. " +
+                "Call bridge_health to see available instances, then use bind_solution or bind_instance to reconnect.");
+        }
+
+        return new McpRequestException(id, TimeoutError, $"Timed out: {ex.Message}");
     }
 
     private async Task<JsonObject> FinalizePipeResponseAsync(JsonObject response, JsonObject request, bool ignoreSolutionHint, ToolTimeoutProfile timeoutProfile)
@@ -406,6 +431,7 @@ internal sealed class BridgeConnection
         ["solutionName"] = inst.SolutionName,
         ["label"] = inst.Label,
         ["source"] = inst.Source,
+        ["version"] = inst.Version ?? "pre-3.0.6",
     };
 
     private static JsonObject SelectorToJson(BridgeInstanceSelector sel) => new()
@@ -415,37 +441,5 @@ internal sealed class BridgeConnection
         ["pipeName"] = sel.PipeName,
         ["solutionHint"] = sel.SolutionHint,
     };
-
-    // ── Arg parsing ────────────────────────────────────────────────────────────
-
-    private int GetCommandTimeoutMs(ToolTimeoutProfile timeoutProfile)
-    {
-        return _timeoutOverrideMs ?? timeoutProfile switch
-        {
-            ToolTimeoutProfile.Fast => FastTimeoutMs,
-            ToolTimeoutProfile.Interactive => InteractiveTimeoutMs,
-            ToolTimeoutProfile.Heavy => HeavyTimeoutMs,
-            ToolTimeoutProfile.BuildWait => BuildWaitTimeoutMs,
-            _ => InteractiveTimeoutMs,
-        };
-    }
-
-    private int GetPipeGateTimeoutMs(ToolTimeoutProfile timeoutProfile)
-    {
-        int pipeGateTimeoutMs = timeoutProfile switch
-        {
-            ToolTimeoutProfile.Fast => FastPipeGateTimeoutMs,
-            ToolTimeoutProfile.Interactive => InteractivePipeGateTimeoutMs,
-            ToolTimeoutProfile.Heavy or ToolTimeoutProfile.BuildWait => HeavyPipeGateTimeoutMs,
-            _ => InteractivePipeGateTimeoutMs,
-        };
-
-        return _timeoutOverrideMs is int timeoutOverrideMs
-            ? Math.Min(pipeGateTimeoutMs, timeoutOverrideMs)
-            : pipeGateTimeoutMs;
-    }
-
-    private static bool ShouldRetry(ToolTimeoutProfile timeoutProfile)
-        => timeoutProfile != ToolTimeoutProfile.Fast;
 
 }
